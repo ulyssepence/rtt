@@ -74,6 +74,11 @@ def main():
     p_embed = sub.add_parser("embed")
     p_embed.add_argument("path", type=Path)
 
+    p_batch = sub.add_parser("batch")
+    p_batch.add_argument("input", type=Path, help="JSON file with video jobs or directory of JSON files")
+    p_batch.add_argument("--output-dir", "-o", type=Path, default=Path("."))
+    p_batch.add_argument("--no-enrich", action="store_true")
+
     args = parser.parse_args()
 
     from rtt import runtime
@@ -133,6 +138,28 @@ def main():
         embedder = em.OllamaEmbedder()
         vecs = embedder.embed_batch(texts)
         print(f"Embedded {len(vecs)} segments, dim={len(vecs[0])}")
+
+    elif args.command == "batch":
+        runtime.require(
+            needs_ffmpeg=True, needs_ollama=True,
+            needs_assemblyai=True, needs_anthropic=not args.no_enrich,
+        )
+        import asyncio, json
+        from rtt import batch, types as t_mod
+        input_path = args.input
+        if input_path.is_dir():
+            raw = []
+            for f in sorted(input_path.glob("*.json")):
+                raw.extend(json.loads(f.read_text()) if isinstance(json.loads(f.read_text()), list) else [json.loads(f.read_text())])
+        else:
+            data = json.loads(input_path.read_text())
+            raw = data if isinstance(data, list) else [data]
+        jobs = [t_mod.VideoJob(**j) for j in raw]
+        if not jobs:
+            print("No video jobs found.")
+            sys.exit(1)
+        print(f"Processing {len(jobs)} videos in batch mode...")
+        asyncio.run(batch.process_batch(jobs, args.output_dir, skip_enrich=args.no_enrich))
 
     else:
         parser.print_help()

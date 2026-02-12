@@ -12,6 +12,7 @@ dependencies = [
     "anthropic>=0.43",
     "faster-whisper>=1.1",
     "httpx>=0.28",
+    "assemblyai>=0.37",
 ]
 
 [project.scripts]

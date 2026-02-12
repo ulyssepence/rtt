@@ -1,4 +1,6 @@
+import os
 import sys
+import time
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
@@ -34,4 +36,54 @@ class WhisperTranscriber:
                 print(f"\r  Transcribing: {pct:.0f}% ({seg.end:.0f}/{duration:.0f}s)", end="", flush=True)
         if duration > 0:
             print()
+        return segments
+
+
+class AssemblyAITranscriber:
+    def __init__(self, api_key: str | None = None):
+        import assemblyai as aai
+        aai.settings.api_key = api_key or os.environ["ASSEMBLYAI_API_KEY"]
+        self._aai = aai
+
+    def transcribe_url(self, url: str, video_id: str) -> list[t.Segment]:
+        config = self._aai.TranscriptionConfig(speech_models=["universal"])
+        transcript = self._aai.Transcriber().transcribe(url, config=config)
+        if transcript.status == self._aai.TranscriptStatus.error:
+            raise RuntimeError(f"AssemblyAI transcription failed: {transcript.error}")
+        segments = []
+        for i, utt in enumerate(transcript.utterances or []):
+            text = utt.text.strip()
+            if not text:
+                continue
+            segments.append(t.Segment(
+                segment_id=f"{video_id}_{i:05d}",
+                video_id=video_id,
+                start_seconds=utt.start / 1000.0,
+                end_seconds=utt.end / 1000.0,
+                transcript_raw=text,
+            ))
+        if not segments and transcript.words:
+            segments = self._segments_from_words(transcript.words, video_id)
+        return segments
+
+    def _segments_from_words(self, words, video_id: str, max_gap_ms: int = 1500) -> list[t.Segment]:
+        chunks: list[list] = [[]]
+        for w in words:
+            if chunks[-1] and w.start - chunks[-1][-1].end > max_gap_ms:
+                chunks.append([])
+            chunks[-1].append(w)
+        segments = []
+        for i, chunk in enumerate(chunks):
+            if not chunk:
+                continue
+            text = " ".join(w.text for w in chunk).strip()
+            if not text:
+                continue
+            segments.append(t.Segment(
+                segment_id=f"{video_id}_{i:05d}",
+                video_id=video_id,
+                start_seconds=chunk[0].start / 1000.0,
+                end_seconds=chunk[-1].end / 1000.0,
+                transcript_raw=text,
+            ))
         return segments

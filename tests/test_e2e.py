@@ -16,11 +16,9 @@ def rtt_file(request):
     if _rtt_cache and _rtt_cache.exists():
         return _rtt_cache
 
-    data_dir = Path(__file__).parent.parent / "data" / "sample"
-    candidates = list(data_dir.glob("*.mp4"))
-    if not candidates:
-        pytest.skip("No sample video in data/sample/")
-    sample_video = candidates[0]
+    sample_video = Path(__file__).parent.parent / "data" / "sample" / "KnifeThr1950_512kb.mp4"
+    if not sample_video.exists():
+        pytest.skip("data/sample/KnifeThr1950_512kb.mp4 not found")
 
     _tmp_dir = tempfile.mkdtemp()
     tmp = Path(_tmp_dir)

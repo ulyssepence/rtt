@@ -23,3 +23,11 @@ class Video:
     context: str
     duration_seconds: float
     status: str = "new"
+
+
+@dataclass
+class VideoJob:
+    video_id: str
+    title: str
+    source_url: str
+    context: str = ""
