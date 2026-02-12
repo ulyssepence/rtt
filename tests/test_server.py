@@ -119,7 +119,7 @@ def test_video_endpoint_404_for_unknown(client):
     assert resp.status_code == 404
 
 
-def test_remote_source_url_passed_through():
+def test_source_url_always_uses_video_route():
     with tempfile.TemporaryDirectory() as tmp:
         tmp = Path(tmp)
         frames_dir = tmp / "build_frames"
@@ -141,4 +141,4 @@ def test_remote_source_url_passed_through():
         client = TestClient(app)
         resp = client.get("/search?q=nuclear+bomb")
         r = resp.json()["results"][0]
-        assert r["source_url"] == "https://archive.org/download/test/test.mp4"
+        assert r["source_url"] == "/video/remote"

@@ -92,8 +92,9 @@ function render() {
     if (activeResult) {
       const videoEl = document.getElementById("video-player") as HTMLVideoElement;
       if (videoEl) {
+        const seekTo = activeResult.start_seconds;
+        videoEl.addEventListener("loadedmetadata", () => { videoEl.currentTime = seekTo; }, { once: true });
         new (window as any).Plyr(videoEl);
-        videoEl.currentTime = activeResult.start_seconds;
       }
 
       document.getElementById("overlay")!.addEventListener("click", (e) => {

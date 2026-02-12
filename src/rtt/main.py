@@ -24,15 +24,17 @@ def process(
     source_url: str = "",
     context: str | None = None,
     skip_enrich: bool = False,
+    output_dir: Path | None = None,
 ) -> Path:
     vid_id = video_id or video_path.stem
     vid_title = title or video_path.stem
     vid_context = context or vid_title
+    out = output_dir or video_path.parent
 
     status = _load_status(video_path)
 
     if status.get("status") == "ready":
-        rtt_path = video_path.parent / f"{vid_id}.rtt"
+        rtt_path = out / f"{vid_id}.rtt"
         if rtt_path.exists():
             return rtt_path
 
@@ -104,7 +106,8 @@ def process(
         context=vid_context, duration_seconds=duration, status="ready",
     )
 
-    rtt_path = video_path.parent / f"{vid_id}.rtt"
+    out.mkdir(parents=True, exist_ok=True)
+    rtt_path = out / f"{vid_id}.rtt"
     print(f"Packaging {rtt_path}...")
     package.create(video, segments, frames_dir, rtt_path)
 
