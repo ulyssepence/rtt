@@ -33,8 +33,10 @@ def rtt_dir():
         (frames_dir / "000000.jpg").write_bytes(b"\xff\xd8fake")
         (frames_dir / "000005.jpg").write_bytes(b"\xff\xd8fake")
 
+        (tmp / "test.mp4").write_bytes(b"\x00\x00\x00\x1cftypisom")
+
         video = t.Video(
-            video_id="test", title="Test", source_url="https://example.com",
+            video_id="test", title="Test", source_url="",
             context="Test", duration_seconds=10.0,
         )
         segments = [
@@ -102,3 +104,41 @@ def test_frame_url_resolves(client):
     if frame_url:
         img_resp = client.get(frame_url)
         assert img_resp.status_code == 200
+
+
+def test_source_url_resolves_for_local_video(client):
+    resp = client.get("/search?q=nuclear+bomb")
+    r = resp.json()["results"][0]
+    assert r["source_url"].startswith("/video/")
+    video_resp = client.get(r["source_url"])
+    assert video_resp.status_code == 200
+
+
+def test_video_endpoint_404_for_unknown(client):
+    resp = client.get("/video/nonexistent")
+    assert resp.status_code == 404
+
+
+def test_remote_source_url_passed_through():
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        frames_dir = tmp / "build_frames"
+        frames_dir.mkdir()
+        (frames_dir / "000000.jpg").write_bytes(b"\xff\xd8fake")
+        video = t.Video(
+            video_id="remote", title="Remote", source_url="https://archive.org/download/test/test.mp4",
+            context="Remote", duration_seconds=5.0,
+        )
+        segments = [t.Segment(
+            segment_id="remote_00000", video_id="remote",
+            start_seconds=0.0, end_seconds=5.0,
+            transcript_raw="test", transcript_enriched="test",
+            text_embedding=[1.0] + [0.0] * 767, frame_path="frames/000000.jpg",
+        )]
+        package.create(video, segments, frames_dir, tmp / "remote.rtt")
+        from rtt import server
+        app = server.create_app(tmp, embedder=FakeEmbedder())
+        client = TestClient(app)
+        resp = client.get("/search?q=nuclear+bomb")
+        r = resp.json()["results"][0]
+        assert r["source_url"] == "https://archive.org/download/test/test.mp4"

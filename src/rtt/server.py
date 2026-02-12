@@ -37,7 +37,14 @@ def create_app(rtt_dir: Path, embedder: embed.Embedder | None = None) -> FastAPI
 
     for rtt_path in sorted(rtt_dir.glob("*.rtt")):
         vid, segments, arrow_table = package.load(rtt_path)
-        videos[vid.video_id] = {"title": vid.title, "source_url": vid.source_url}
+        source_url = vid.source_url
+        if not source_url:
+            for ext in (".mp4", ".webm", ".mkv"):
+                candidate = rtt_path.with_suffix(ext)
+                if candidate.exists():
+                    source_url = f"/video/{vid.video_id}"
+                    break
+        videos[vid.video_id] = {"title": vid.title, "source_url": source_url, "local_path": rtt_path.parent}
 
         seg_objects = []
         embeddings = arrow_table.column("text_embedding").to_pylist()
@@ -61,6 +68,20 @@ def create_app(rtt_dir: Path, embedder: embed.Embedder | None = None) -> FastAPI
         app.mount("/static", StaticFiles(directory=str(frontend_dist)), name="static")
 
     frontend_index = Path(__file__).parent.parent.parent / "frontend" / "index.html"
+
+    @app.get("/video/{video_id}")
+    def video(video_id: str):
+        vid_info = videos.get(video_id)
+        if not vid_info:
+            raise HTTPException(status_code=404, detail="Video not found")
+        local_path = vid_info.get("local_path")
+        if not local_path:
+            raise HTTPException(status_code=404, detail="No local video")
+        for ext in (".mp4", ".webm", ".mkv"):
+            candidate = local_path / f"{video_id}{ext}"
+            if candidate.exists():
+                return FileResponse(str(candidate), media_type=f"video/{ext[1:]}")
+        raise HTTPException(status_code=404, detail="Video file not found")
 
     @app.get("/")
     def index():
