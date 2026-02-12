@@ -14,7 +14,7 @@ def data_dir():
 
 @pytest.fixture
 def sample_video(data_dir):
-    candidates = list(data_dir.glob("*.mp4"))
-    if not candidates:
-        pytest.skip("No sample video in data/sample/")
-    return candidates[0]
+    path = data_dir / "KnifeThr1950_512kb.mp4"
+    if not path.exists():
+        pytest.skip("data/sample/KnifeThr1950_512kb.mp4 not found")
+    return path

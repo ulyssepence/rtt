@@ -46,7 +46,14 @@ def _check_anthropic_key() -> bool:
     return bool(os.environ.get("ANTHROPIC_API_KEY"))
 
 
-def check(needs_ffmpeg: bool = False, needs_ollama: bool = False, needs_anthropic: bool = False) -> list[str]:
+def _check_assemblyai_key() -> bool:
+    return bool(os.environ.get("ASSEMBLYAI_API_KEY"))
+
+
+def check(
+    needs_ffmpeg: bool = False, needs_ollama: bool = False,
+    needs_anthropic: bool = False, needs_assemblyai: bool = False,
+) -> list[str]:
     errors = []
 
     if needs_ffmpeg and not _check_binary("ffmpeg"):
@@ -61,11 +68,20 @@ def check(needs_ffmpeg: bool = False, needs_ollama: bool = False, needs_anthropi
     if needs_anthropic and not _check_anthropic_key():
         errors.append("ANTHROPIC_API_KEY not set — add it to .env or export it")
 
+    if needs_assemblyai and not _check_assemblyai_key():
+        errors.append("ASSEMBLYAI_API_KEY not set — add it to .env or export it")
+
     return errors
 
 
-def require(needs_ffmpeg: bool = False, needs_ollama: bool = False, needs_anthropic: bool = False):
-    errors = check(needs_ffmpeg=needs_ffmpeg, needs_ollama=needs_ollama, needs_anthropic=needs_anthropic)
+def require(
+    needs_ffmpeg: bool = False, needs_ollama: bool = False,
+    needs_anthropic: bool = False, needs_assemblyai: bool = False,
+):
+    errors = check(
+        needs_ffmpeg=needs_ffmpeg, needs_ollama=needs_ollama,
+        needs_anthropic=needs_anthropic, needs_assemblyai=needs_assemblyai,
+    )
     if errors:
         print("Missing requirements:", file=sys.stderr)
         for e in errors:
