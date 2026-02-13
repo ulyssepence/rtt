@@ -20,6 +20,7 @@ def create(video: t.Video, segments: list[t.Segment], frames_dir: Path | None, o
         "frame_path": [s.frame_path for s in segments],
         "has_speech": [s.has_speech for s in segments],
         "source": [s.source for s in segments],
+        "collection": [s.collection for s in segments],
     })
 
     manifest = {
@@ -28,6 +29,7 @@ def create(video: t.Video, segments: list[t.Segment], frames_dir: Path | None, o
         "title": video.title,
         **({"source_url": video.source_url} if video.source_url else {}),
         **({"page_url": video.page_url} if video.page_url else {}),
+        **({"collection": video.collection} if video.collection else {}),
         "context": video.context,
         "duration_seconds": video.duration_seconds,
         "segments": [
@@ -64,11 +66,17 @@ def load(rtt_path: Path) -> tuple[t.Video, list[t.Segment], pa.Table]:
         manifest = json.loads(zf.read("manifest.json"))
         pq_bytes = zf.read("segments.parquet")
 
+    source_url = manifest.get("source_url", "")
+    page_url = manifest.get("page_url", "")
+    if not page_url and ("youtube.com/" in source_url or "youtu.be/" in source_url):
+        page_url = source_url
+
     video = t.Video(
         video_id=manifest["video_id"],
         title=manifest["title"],
-        source_url=manifest.get("source_url", ""),
-        page_url=manifest.get("page_url", ""),
+        source_url=source_url,
+        page_url=page_url,
+        collection=manifest.get("collection", ""),
         context=manifest["context"],
         duration_seconds=manifest["duration_seconds"],
         status=manifest["status"],
@@ -85,6 +93,7 @@ def load(rtt_path: Path) -> tuple[t.Video, list[t.Segment], pa.Table]:
             frame_path=s.get("frame_path", ""),
             has_speech=s.get("has_speech", True),
             source=s.get("source", "transcript"),
+            collection=manifest.get("collection", ""),
         )
         for s in manifest["segments"]
     ]

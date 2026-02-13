@@ -172,12 +172,15 @@ async def process_batch(
                 seg.frame_path = f"frames/{fp.name}" if fp else ""
 
             # --- Package ---
+            for seg in segments:
+                seg.collection = job.collection
             duration = max(s.end_seconds for s in segments) if segments else 0.0
             video = t.Video(
                 video_id=vid, title=job.title,
                 source_url=job.page_url or job.source_url,
                 context=job.context or job.title,
                 duration_seconds=duration, status="ready",
+                collection=job.collection,
             )
             package.create(video, segments, fd, rtt_path)
             _cleanup(output_dir, vid)
