@@ -22,6 +22,7 @@ class Video:
     source_url: str
     context: str
     duration_seconds: float
+    page_url: str = ""
     status: str = "new"
 
 
@@ -31,3 +32,4 @@ class VideoJob:
     title: str
     source_url: str
     context: str = ""
+    page_url: str = ""

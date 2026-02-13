@@ -74,8 +74,11 @@ def main():
     p_embed = sub.add_parser("embed")
     p_embed.add_argument("path", type=Path)
 
+    p_channel = sub.add_parser("channel", help="List video IDs from a YouTube channel")
+    p_channel.add_argument("url", type=str)
+
     p_batch = sub.add_parser("batch")
-    p_batch.add_argument("input", type=Path, help="JSON file with video jobs or directory of JSON files")
+    p_batch.add_argument("input", type=str, help="JSON file, directory of JSON files, or YouTube channel URL")
     p_batch.add_argument("--output-dir", "-o", type=Path, default=Path("."))
     p_batch.add_argument("--no-enrich", action="store_true")
 
@@ -146,15 +149,29 @@ def main():
         )
         import asyncio, json
         from rtt import batch, types as t_mod
-        input_path = args.input
-        if input_path.is_dir():
-            raw = []
-            for f in sorted(input_path.glob("*.json")):
-                raw.extend(json.loads(f.read_text()) if isinstance(json.loads(f.read_text()), list) else [json.loads(f.read_text())])
+        if _is_url(args.input) and "youtube.com/" in args.input:
+            from rtt import youtube
+            entries = youtube.channel_video_ids(args.input)
+            print(f"Found {len(entries)} videos")
+            jobs = [
+                t_mod.VideoJob(
+                    video_id=e["id"],
+                    title=e["title"],
+                    source_url=youtube.video_url(e["id"]),
+                    page_url=youtube.video_url(e["id"]),
+                )
+                for e in entries
+            ]
         else:
-            data = json.loads(input_path.read_text())
-            raw = data if isinstance(data, list) else [data]
-        jobs = [t_mod.VideoJob(**j) for j in raw]
+            input_path = Path(args.input)
+            if input_path.is_dir():
+                raw = []
+                for f in sorted(input_path.glob("*.json")):
+                    raw.extend(json.loads(f.read_text()) if isinstance(json.loads(f.read_text()), list) else [json.loads(f.read_text())])
+            else:
+                data = json.loads(input_path.read_text())
+                raw = data if isinstance(data, list) else [data]
+            jobs = [t_mod.VideoJob(**j) for j in raw]
         if not jobs:
             print("No video jobs found.")
             sys.exit(1)

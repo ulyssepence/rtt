@@ -8,6 +8,7 @@ interface SearchResult {
   transcript_raw: string;
   transcript_enriched: string;
   frame_url: string | null;
+  page_url: string | null;
   score: number;
 }
 
@@ -64,6 +65,7 @@ function render() {
             <video id="video-player" controls crossorigin>
               <source src="${esc(activeResult.source_url)}" />
             </video>
+            ${activeResult.page_url ? `<a class="source-link" href="${esc(activeResult.page_url)}" target="_blank" rel="noopener">Source</a>` : ""}
           </div>
         </div>
       ` : ""}

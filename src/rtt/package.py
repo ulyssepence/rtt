@@ -27,6 +27,7 @@ def create(video: t.Video, segments: list[t.Segment], frames_dir: Path | None, o
         "status": "ready",
         "title": video.title,
         **({"source_url": video.source_url} if video.source_url else {}),
+        **({"page_url": video.page_url} if video.page_url else {}),
         "context": video.context,
         "duration_seconds": video.duration_seconds,
         "segments": [
@@ -67,6 +68,7 @@ def load(rtt_path: Path) -> tuple[t.Video, list[t.Segment], pa.Table]:
         video_id=manifest["video_id"],
         title=manifest["title"],
         source_url=manifest.get("source_url", ""),
+        page_url=manifest.get("page_url", ""),
         context=manifest["context"],
         duration_seconds=manifest["duration_seconds"],
         status=manifest["status"],
