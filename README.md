@@ -15,6 +15,7 @@ Built for the [Prelinger Archives](https://archive.org/details/prelinger) — th
 - [FFmpeg](https://ffmpeg.org/)
 - [Ollama](https://ollama.com/) with `nomic-embed-text` pulled (`ollama pull nomic-embed-text`)
 - Anthropic API key (for transcript enrichment)
+- AssemblyAI API key (for batch/YouTube processing)
 
 ## Setup
 
@@ -45,6 +46,18 @@ uv run rtt serve data/videos/
 
 Then open `http://localhost:8000`.
 
+Batch process an entire YouTube channel:
+
+```
+uv run rtt batch "https://www.youtube.com/@channel" -o output/
+```
+
+Batch process from a JSON manifest:
+
+```
+uv run rtt batch jobs.json -o output/
+```
+
 ### Individual pipeline stages
 
 ```
@@ -55,7 +68,7 @@ uv run rtt embed video.mp4
 
 ## How it works
 
-1. **Transcribe** — `faster-whisper` (large-v3, local) produces timestamped transcript segments
+1. **Transcribe** — `faster-whisper` (large-v3, local) for single files, or AssemblyAI (cloud) for batch/YouTube. Produces timestamped transcript segments
 2. **Enrich** — Claude rewrites each segment to add related concepts, synonyms, and themes (EnrichIndex technique, +11.7 recall@10 over raw transcripts)
 3. **Embed** — `nomic-embed-text` via Ollama produces 768d vectors for each enriched segment
 4. **Extract frames** — FFmpeg pulls a thumbnail at each segment's start timestamp
@@ -87,7 +100,9 @@ All modules in `src/rtt/`, flat structure. Protocol classes for interfaces, one 
 
 | Module | Responsibility |
 |---|---|
-| `transcribe.py` | Whisper transcription (local) |
+| `transcribe.py` | Whisper (local) and AssemblyAI (cloud) transcription |
+| `youtube.py` | YouTube channel listing and video download (yt-dlp) |
+| `batch.py` | Async batch pipeline with resumable status tracking |
 | `enrich.py` | Claude transcript enrichment |
 | `embed.py` | Ollama text embeddings |
 | `frames.py` | FFmpeg frame extraction |
@@ -98,4 +113,4 @@ All modules in `src/rtt/`, flat structure. Protocol classes for interfaces, one 
 
 ## Cost
 
-Whisper and embeddings run locally (free). Only cost is Claude enrichment: ~$0.03 per video for a 10-minute film with Sonnet.
+Whisper and embeddings run locally (free). Claude enrichment: ~$0.03 per video for a 10-minute film with Sonnet. AssemblyAI transcription (batch mode): ~$0.06 per video for a 10-minute film.

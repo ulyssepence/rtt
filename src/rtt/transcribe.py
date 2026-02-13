@@ -46,7 +46,18 @@ class AssemblyAITranscriber:
         self._aai = aai
 
     def transcribe_url(self, url: str, video_id: str) -> list[t.Segment]:
-        config = self._aai.TranscriptionConfig(speech_models=["universal"])
+        config = self._aai.TranscriptionConfig(
+            speech_model=self._aai.SpeechModel.best,
+            filter_profanity=False,
+            speaker_labels=False,
+            auto_chapters=False,
+            entity_detection=False,
+            sentiment_analysis=False,
+            auto_highlights=False,
+            iab_categories=False,
+            content_safety=False,
+            summarization=False,
+        )
         transcript = self._aai.Transcriber().transcribe(url, config=config)
         if transcript.status == self._aai.TranscriptStatus.error:
             raise RuntimeError(f"AssemblyAI transcription failed: {transcript.error}")

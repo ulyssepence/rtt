@@ -21,6 +21,7 @@ class SearchResult(BaseModel):
     transcript_raw: str
     transcript_enriched: str
     frame_url: str | None = None
+    page_url: str | None = None
     score: float = 0.0
 
 
@@ -41,6 +42,7 @@ def create_app(rtt_dir: Path, embedder: embed.Embedder | None = None) -> FastAPI
         videos[vid.video_id] = {
             "title": vid.title,
             "remote_url": vid.source_url or None,
+            "page_url": vid.page_url or None,
             "local_dir": rtt_path.parent,
         }
 
@@ -128,6 +130,7 @@ def create_app(rtt_dir: Path, embedder: embed.Embedder | None = None) -> FastAPI
                 transcript_raw=r.get("transcript_raw", ""),
                 transcript_enriched=r.get("transcript_enriched", ""),
                 frame_url=frame_url,
+                page_url=vid_info.get("page_url"),
                 score=r.get("_distance", 0.0),
             ))
 
