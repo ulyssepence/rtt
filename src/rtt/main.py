@@ -25,6 +25,7 @@ def process(
     context: str | None = None,
     skip_enrich: bool = False,
     output_dir: Path | None = None,
+    collection: str = "",
 ) -> Path:
     vid_id = video_id or video_path.stem
     vid_title = title or video_path.stem
@@ -100,10 +101,13 @@ def process(
     for seg, fp in zip(segments, frame_paths):
         seg.frame_path = f"frames/{fp.name}" if fp else ""
 
+    for seg in segments:
+        seg.collection = collection
     duration = max(s.end_seconds for s in segments) if segments else 0.0
     video = t.Video(
         video_id=vid_id, title=vid_title, source_url=source_url,
         context=vid_context, duration_seconds=duration, status="ready",
+        collection=collection,
     )
 
     out.mkdir(parents=True, exist_ok=True)

@@ -13,6 +13,7 @@ class Segment:
     frame_path: str = ""
     has_speech: bool = True
     source: str = "transcript"
+    collection: str = ""
 
 
 @dataclass
@@ -24,6 +25,7 @@ class Video:
     duration_seconds: float
     page_url: str = ""
     status: str = "new"
+    collection: str = ""
 
 
 @dataclass
@@ -33,3 +35,4 @@ class VideoJob:
     source_url: str
     context: str = ""
     page_url: str = ""
+    collection: str = ""

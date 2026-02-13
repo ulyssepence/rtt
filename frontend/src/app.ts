@@ -1,4 +1,4 @@
-interface SearchResult {
+interface SegmentResult {
   video_id: string;
   segment_id: string;
   start_seconds: number;
@@ -9,106 +9,66 @@ interface SearchResult {
   transcript_enriched: string;
   frame_url: string | null;
   page_url: string | null;
+  collection: string;
   score: number;
 }
 
 interface SearchResponse {
   query: string;
-  results: SearchResult[];
+  results: SegmentResult[];
 }
+
+interface SegmentsResponse {
+  segments: SegmentResult[];
+  total: number;
+  offset: number;
+  limit: number;
+}
+
+interface CollectionInfo {
+  id: string;
+  video_count: number;
+  segment_count: number;
+}
+
+type Mode = "browse" | "search" | "similar";
+
+const PAGE_SIZE = 200;
+const CELL_W = 244;
+const CELL_H = 140;
+
+let mode: Mode = "browse";
+let segments: SegmentResult[] = [];
+let searchResults: SegmentResult[] = [];
+let activeOverlay: SegmentResult | null = null;
+let query = "";
+let browseOffset = 0;
+let browseTotal = 0;
+let loading = false;
+let collections: CollectionInfo[] = [];
+let activeCollections: Set<string> = new Set();
+let filterOpen = false;
+let shuffleOrder: number[] = [];
+
+let panX = 0;
+let panY = 0;
+let dragging = false;
+let dragStartX = 0;
+let dragStartY = 0;
+let dragStartPanX = 0;
+let dragStartPanY = 0;
+let dragMoved = false;
+let velX = 0;
+let velY = 0;
+let lastMoveTime = 0;
+let lastMoveX = 0;
+let lastMoveY = 0;
+let inertiaRaf = 0;
 
 function formatTime(seconds: number): string {
   const m = Math.floor(seconds / 60);
   const s = Math.floor(seconds % 60);
   return `${m}:${s.toString().padStart(2, "0")}`;
-}
-
-async function fetchResults(query: string): Promise<SearchResult[]> {
-  const resp = await fetch(`/search?q=${encodeURIComponent(query)}`);
-  if (!resp.ok) return [];
-  const data: SearchResponse = await resp.json();
-  return data.results;
-}
-
-function render() {
-  const root = document.getElementById("root")!;
-  let query = "";
-  let results: SearchResult[] = [];
-  let activeResult: SearchResult | null = null;
-
-  function update() {
-    root.innerHTML = `
-      <div class="search-container">
-        <h1>Remember That Time</h1>
-        <form class="search-bar" id="search-form">
-          <input type="text" id="query" placeholder="Search across videos..." value="${esc(query)}" />
-          <button type="submit">Search</button>
-        </form>
-      </div>
-      <div id="results" class="results-grid">
-        ${results.length === 0 ? '<div class="status">Search for something</div>' : results.map((r, i) => `
-          <div class="result-card${r.score > 1.0 ? " weak-match" : ""}" data-idx="${i}">
-            ${r.frame_url ? `<img src="${r.frame_url}" alt="" loading="lazy" />` : `<div style="aspect-ratio:16/9;background:#1a1a1a"></div>`}
-            <div class="info">
-              <div class="title">${esc(r.title)}</div>
-              <div class="timestamp">${formatTime(r.start_seconds)} — ${formatTime(r.end_seconds)}</div>
-              <div class="transcript">${esc(r.transcript_raw)}</div>
-              ${r.score > 1.0 ? '<div class="weak-label">Weak match</div>' : ""}
-            </div>
-          </div>
-        `).join("")}
-      </div>
-      ${activeResult ? `
-        <div class="player-overlay" id="overlay">
-          <div class="player-container">
-            <button class="close-btn" id="close-player">&times;</button>
-            <video id="video-player" controls crossorigin>
-              <source src="${esc(activeResult.source_url)}" />
-            </video>
-            ${activeResult.page_url ? `<a class="source-link" href="${esc(activeResult.page_url)}" target="_blank" rel="noopener">Source</a>` : ""}
-          </div>
-        </div>
-      ` : ""}
-    `;
-
-    const input = document.getElementById("query") as HTMLInputElement;
-    input.focus();
-    input.selectionStart = input.selectionEnd = input.value.length;
-
-    document.getElementById("search-form")!.addEventListener("submit", async (e) => {
-      e.preventDefault();
-      query = input.value.trim();
-      if (!query) return;
-      results = await fetchResults(query);
-      update();
-    });
-
-    document.querySelectorAll(".result-card").forEach((card) => {
-      card.addEventListener("click", () => {
-        const idx = parseInt((card as HTMLElement).dataset.idx!);
-        activeResult = results[idx];
-        update();
-      });
-    });
-
-    if (activeResult) {
-      const videoEl = document.getElementById("video-player") as HTMLVideoElement;
-      if (videoEl) {
-        const seekTo = activeResult.start_seconds;
-        videoEl.addEventListener("loadedmetadata", () => { videoEl.currentTime = seekTo; }, { once: true });
-        new (window as any).Plyr(videoEl);
-      }
-
-      document.getElementById("overlay")!.addEventListener("click", (e) => {
-        if ((e.target as HTMLElement).id === "overlay") { activeResult = null; update(); }
-      });
-      document.getElementById("close-player")!.addEventListener("click", () => {
-        activeResult = null; update();
-      });
-    }
-  }
-
-  update();
 }
 
 function esc(s: string): string {
@@ -117,4 +77,449 @@ function esc(s: string): string {
   return d.innerHTML;
 }
 
-document.addEventListener("DOMContentLoaded", render);
+function isYouTube(url: string | null): boolean {
+  if (!url) return false;
+  return url.includes("youtube.com/watch") || url.includes("youtu.be/");
+}
+
+function youtubeVideoId(url: string): string | null {
+  const m = url.match(/[?&]v=([^&]+)/) || url.match(/youtu\.be\/([^?]+)/);
+  return m ? m[1] : null;
+}
+
+function collectionParam(): string {
+  if (activeCollections.size === 0) return "";
+  return `&collections=${[...activeCollections].join(",")}`;
+}
+
+async function fetchSegments(offset: number, limit: number): Promise<SegmentsResponse> {
+  const resp = await fetch(`/segments?offset=${offset}&limit=${limit}${collectionParam()}`);
+  return resp.json();
+}
+
+async function fetchSearch(q: string, n = 50): Promise<SegmentResult[]> {
+  const resp = await fetch(`/search?q=${encodeURIComponent(q)}&n=${n}${collectionParam()}`);
+  if (!resp.ok) return [];
+  const data: SearchResponse = await resp.json();
+  return data.results;
+}
+
+async function fetchSimilar(segmentId: string, n = 50): Promise<SegmentResult[]> {
+  const resp = await fetch(`/search?segment_id=${encodeURIComponent(segmentId)}&n=${n}${collectionParam()}`);
+  if (!resp.ok) return [];
+  const data: SearchResponse = await resp.json();
+  return data.results;
+}
+
+async function fetchCollections(): Promise<CollectionInfo[]> {
+  const resp = await fetch("/collections");
+  const data = await resp.json();
+  return data.collections;
+}
+
+async function loadInitialSegments() {
+  loading = true;
+  render();
+  const data = await fetchSegments(0, PAGE_SIZE);
+  segments = data.segments;
+  browseTotal = data.total;
+  browseOffset = segments.length;
+  shuffleOrder = Array.from({ length: segments.length }, (_, i) => i);
+  shuffle(shuffleOrder);
+  loading = false;
+  render();
+  centerCanvas();
+}
+
+async function loadMoreSegments() {
+  if (loading || browseOffset >= browseTotal) return;
+  loading = true;
+  const data = await fetchSegments(browseOffset, PAGE_SIZE);
+  const newStart = segments.length;
+  segments.push(...data.segments);
+  browseOffset += data.segments.length;
+  const newIndices = Array.from({ length: data.segments.length }, (_, i) => newStart + i);
+  shuffle(newIndices);
+  shuffleOrder.push(...newIndices);
+  loading = false;
+  render();
+}
+
+function shuffle(arr: number[]) {
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+}
+
+function displaySegments(): SegmentResult[] {
+  if (mode === "browse") {
+    return shuffleOrder.map(i => segments[i]);
+  }
+  return searchResults;
+}
+
+
+function renderFilterPanel(): string {
+  if (!filterOpen) return "";
+  return `
+    <div class="filter-panel">
+      ${collections.map(c => `
+        <label class="filter-item">
+          <input type="checkbox" data-collection="${esc(c.id)}" ${activeCollections.has(c.id) ? "checked" : ""} />
+          <span>${esc(c.id || "(no collection)")}</span>
+          <span class="filter-count">${c.video_count} videos, ${c.segment_count} segments</span>
+        </label>
+      `).join("")}
+    </div>
+  `;
+}
+
+function renderVideoOverlay(): string {
+  if (!activeOverlay) return "";
+  const seg = activeOverlay;
+  const ytId = seg.page_url && isYouTube(seg.page_url) ? youtubeVideoId(seg.page_url) : null;
+  const startInt = Math.floor(seg.start_seconds);
+
+  let playerHtml: string;
+  if (ytId) {
+    playerHtml = `<div class="yt-container"><iframe id="yt-iframe" src="https://www.youtube.com/embed/${ytId}?start=${startInt}&autoplay=1" frameborder="0" allow="autoplay; encrypted-media" allowfullscreen></iframe></div>`;
+  } else {
+    playerHtml = `<video id="video-player" controls crossorigin autoplay><source src="${esc(seg.source_url)}" /></video>`;
+  }
+
+  return `
+    <div class="overlay" id="overlay">
+      <div class="overlay-content">
+        <button class="close-btn" id="close-overlay">&times;</button>
+        <div class="overlay-player">${playerHtml}</div>
+        <div class="overlay-info">
+          <h2 class="overlay-title">${esc(seg.title)}</h2>
+          <div class="overlay-time">${formatTime(seg.start_seconds)} — ${formatTime(seg.end_seconds)}</div>
+          <p class="overlay-transcript">${esc(seg.transcript_raw)}</p>
+          ${seg.collection ? `<div class="overlay-collection">${esc(seg.collection)}</div>` : ""}
+          ${seg.page_url ? `<a class="overlay-source" href="${esc(seg.page_url)}" target="_blank" rel="noopener">View source</a>` : ""}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+interface CellLayout {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+function layoutCells(items: SegmentResult[], cols: number, isSearch: boolean): CellLayout[] {
+  const cells: CellLayout[] = [];
+  if (items.length === 0) return cells;
+
+  if (isSearch && cols >= 2) {
+    cells.push({ x: 0, y: 0, w: CELL_W * 2, h: CELL_H * 2 });
+    const occupied = new Set<string>();
+    occupied.add("0,0"); occupied.add("1,0"); occupied.add("0,1"); occupied.add("1,1");
+    let idx = 1;
+    for (let row = 0; idx < items.length; row++) {
+      for (let col = 0; col < cols && idx < items.length; col++) {
+        if (!occupied.has(`${col},${row}`)) {
+          cells.push({ x: col * CELL_W, y: row * CELL_H, w: CELL_W, h: CELL_H });
+          idx++;
+        }
+      }
+    }
+  } else {
+    for (let i = 0; i < items.length; i++) {
+      const row = Math.floor(i / cols);
+      const col = i % cols;
+      cells.push({ x: col * CELL_W, y: row * CELL_H, w: CELL_W, h: CELL_H });
+    }
+  }
+  return cells;
+}
+
+function tileSize(cells: CellLayout[]): { w: number; h: number } {
+  let maxX = 0, maxY = 0;
+  for (const c of cells) {
+    maxX = Math.max(maxX, c.x + c.w);
+    maxY = Math.max(maxY, c.y + c.h);
+  }
+  return { w: maxX, h: maxY };
+}
+
+function tiledCards(items: SegmentResult[], cols: number, isSearch: boolean): string {
+  const cells = layoutCells(items, cols, isSearch);
+  const tile = tileSize(cells);
+  const tilesX = 3;
+  const tilesY = 3;
+  const isMobile = window.innerWidth < 768;
+
+  const cards: string[] = [];
+  for (let ty = 0; ty < tilesY; ty++) {
+    for (let tx = 0; tx < tilesX; tx++) {
+      for (let i = 0; i < items.length; i++) {
+        const c = cells[i];
+        const x = tx * tile.w + c.x;
+        const y = ty * tile.h + c.y;
+        const seg = items[i];
+        cards.push(`
+          <div class="card" data-idx="${i}" style="position:absolute;left:${x}px;top:${y}px;width:${c.w - 4}px;height:${c.h - 4}px;">
+            <div class="card-thumb" data-action="play">
+              ${seg.frame_url ? `<img src="${seg.frame_url}" alt="" loading="lazy" />` : `<div class="card-placeholder"></div>`}
+            </div>
+            <div class="card-overlay" data-action="${isMobile ? "play" : "similar"}" data-segment-id="${seg.segment_id}">
+              <span class="card-text">${esc(seg.transcript_raw.slice(0, 120))}${seg.transcript_raw.length > 120 ? "..." : ""}</span>
+              ${isMobile ? `<button class="similar-btn" data-action="similar" data-segment-id="${seg.segment_id}" title="Find similar">&#x2731;</button>` : ""}
+            </div>
+          </div>
+        `);
+      }
+    }
+  }
+  return cards.join("");
+}
+
+function render() {
+  const root = document.getElementById("root")!;
+  const items = displaySegments();
+  const isSearch = mode !== "browse";
+  const cols = Math.max(1, Math.ceil(Math.sqrt(items.length)));
+  const cells = layoutCells(items, cols, isSearch);
+  const tile = tileSize(cells);
+  const totalW = tile.w * 3;
+  const totalH = tile.h * 3;
+
+  root.innerHTML = `
+    <div class="top-bar">
+      <form class="search-bar" id="search-form">
+        <input type="text" id="query" placeholder="Search across videos..." value="${esc(query)}" />
+        ${query || isSearch ? `<button type="button" class="clear-btn" id="clear-search">&times;</button>` : ""}
+        <button type="submit">Search</button>
+        <button type="button" class="filter-btn" id="filter-toggle" title="Filter collections">&#x25A7;</button>
+      </form>
+      ${renderFilterPanel()}
+    </div>
+    <div class="viewport" id="viewport">
+      <div class="canvas" id="canvas" style="width:${totalW}px;height:${totalH}px;transform:translate(${panX}px,${panY}px)">
+        ${items.length > 0 ? tiledCards(items, cols, isSearch) : ""}
+        ${loading ? '<div class="status" style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%)">Loading...</div>' : ""}
+      </div>
+    </div>
+    ${renderVideoOverlay()}
+  `;
+
+  bindCanvasDrag();
+  bindEvents();
+}
+
+function currentTile(): { w: number; h: number } {
+  const items = displaySegments();
+  if (items.length === 0) return { w: 1, h: 1 };
+  const isSearch = mode !== "browse";
+  const cols = Math.max(1, Math.ceil(Math.sqrt(items.length)));
+  return tileSize(layoutCells(items, cols, isSearch));
+}
+
+function centerCanvas() {
+  const items = displaySegments();
+  if (items.length === 0) return;
+  const isSearch = mode !== "browse";
+  const cols = Math.max(1, Math.ceil(Math.sqrt(items.length)));
+  const cells = layoutCells(items, cols, isSearch);
+  const tile = tileSize(cells);
+  const first = cells[0];
+  const cx = tile.w + first.x + first.w / 2;
+  const cy = tile.h + first.y + first.h / 2;
+  panX = -cx + window.innerWidth / 2;
+  panY = -cy + window.innerHeight / 2;
+  wrapPan();
+  updateCanvasTransform();
+}
+
+function updateCanvasTransform() {
+  const canvas = document.getElementById("canvas");
+  if (!canvas) return;
+  canvas.style.transform = `translate(${panX}px,${panY}px)`;
+}
+
+function wrapPan() {
+  const tile = currentTile();
+  while (panX > 0) panX -= tile.w;
+  while (panX < -2 * tile.w) panX += tile.w;
+  while (panY > 0) panY -= tile.h;
+  while (panY < -2 * tile.h) panY += tile.h;
+}
+
+function tickInertia() {
+  if (dragging) return;
+  if (Math.abs(velX) < 0.5 && Math.abs(velY) < 0.5) return;
+  velX *= 0.92;
+  velY *= 0.92;
+  panX += velX;
+  panY += velY;
+  wrapPan();
+  updateCanvasTransform();
+  inertiaRaf = requestAnimationFrame(tickInertia);
+}
+
+function setupDragListeners() {
+  document.addEventListener("pointermove", (e) => {
+    if (!dragging) return;
+    const now = performance.now();
+    const dt = now - lastMoveTime;
+    if (dt > 0) {
+      velX = (e.clientX - lastMoveX) * (16 / dt);
+      velY = (e.clientY - lastMoveY) * (16 / dt);
+    }
+    lastMoveTime = now;
+    lastMoveX = e.clientX;
+    lastMoveY = e.clientY;
+    const dx = e.clientX - dragStartX;
+    const dy = e.clientY - dragStartY;
+    if (Math.abs(dx) > 3 || Math.abs(dy) > 3) dragMoved = true;
+    panX = dragStartPanX + dx;
+    panY = dragStartPanY + dy;
+    wrapPan();
+    updateCanvasTransform();
+  });
+  document.addEventListener("pointerup", () => {
+    if (!dragging) return;
+    dragging = false;
+    cancelAnimationFrame(inertiaRaf);
+    inertiaRaf = requestAnimationFrame(tickInertia);
+  });
+
+  document.addEventListener("wheel", (e) => {
+    if ((e.target as HTMLElement).closest(".top-bar")) return;
+    if ((e.target as HTMLElement).closest(".overlay")) return;
+    e.preventDefault();
+    panX += e.deltaX;
+    panY += e.deltaY;
+    wrapPan();
+    updateCanvasTransform();
+  }, { passive: false });
+}
+
+function bindCanvasDrag() {
+  const viewport = document.getElementById("viewport");
+  if (!viewport) return;
+
+  viewport.addEventListener("pointerdown", (e) => {
+    if ((e.target as HTMLElement).closest(".top-bar")) return;
+    e.preventDefault();
+    cancelAnimationFrame(inertiaRaf);
+    velX = 0;
+    velY = 0;
+    dragging = true;
+    dragMoved = false;
+    dragStartX = e.clientX;
+    dragStartY = e.clientY;
+    dragStartPanX = panX;
+    dragStartPanY = panY;
+    lastMoveTime = performance.now();
+    lastMoveX = e.clientX;
+    lastMoveY = e.clientY;
+  });
+}
+
+function bindEvents() {
+  const input = document.getElementById("query") as HTMLInputElement | null;
+  if (input && document.activeElement?.tagName !== "INPUT") {
+    input.focus();
+    input.selectionStart = input.selectionEnd = input.value.length;
+  }
+
+  document.getElementById("search-form")?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const input = document.getElementById("query") as HTMLInputElement;
+    query = input.value.trim();
+    if (!query) return;
+    mode = "search";
+    loading = true;
+    render();
+    searchResults = await fetchSearch(query);
+    loading = false;
+    render();
+    centerCanvas();
+  });
+
+  document.getElementById("clear-search")?.addEventListener("click", () => {
+    query = "";
+    mode = "browse";
+    searchResults = [];
+    render();
+    centerCanvas();
+  });
+
+  document.getElementById("filter-toggle")?.addEventListener("click", () => {
+    filterOpen = !filterOpen;
+    render();
+  });
+
+  document.querySelectorAll(".filter-item input").forEach(cb => {
+    cb.addEventListener("change", async (e) => {
+      const el = e.target as HTMLInputElement;
+      const col = el.dataset.collection!;
+      if (el.checked) activeCollections.add(col);
+      else activeCollections.delete(col);
+      if (mode === "browse") {
+        browseOffset = 0;
+        await loadInitialSegments();
+      } else if (mode === "search" && query) {
+        searchResults = await fetchSearch(query);
+        render();
+      }
+    });
+  });
+
+  document.querySelectorAll(".card").forEach(card => {
+    card.querySelector("[data-action='play']")?.addEventListener("click", () => {
+      if (dragMoved) return;
+      const idx = parseInt((card as HTMLElement).dataset.idx!);
+      const items = displaySegments();
+      activeOverlay = items[idx];
+      render();
+    });
+
+    card.querySelectorAll("[data-action='similar']").forEach(el => {
+      el.addEventListener("click", async (e) => {
+        if (dragMoved) return;
+        e.stopPropagation();
+        const segId = (el as HTMLElement).dataset.segmentId!;
+        mode = "similar";
+        query = "";
+        loading = true;
+        render();
+        searchResults = await fetchSimilar(segId);
+        loading = false;
+        render();
+        centerCanvas();
+      });
+    });
+  });
+
+  if (activeOverlay) {
+    const videoEl = document.getElementById("video-player") as HTMLVideoElement | null;
+    if (videoEl && activeOverlay) {
+      const seekTo = activeOverlay.start_seconds;
+      videoEl.addEventListener("loadedmetadata", () => { videoEl.currentTime = seekTo; }, { once: true });
+      new (window as any).Plyr(videoEl);
+    }
+
+    document.getElementById("overlay")?.addEventListener("click", (e) => {
+      if ((e.target as HTMLElement).id === "overlay") { activeOverlay = null; render(); }
+    });
+    document.getElementById("close-overlay")?.addEventListener("click", () => {
+      activeOverlay = null; render();
+    });
+  }
+}
+
+async function init() {
+  setupDragListeners();
+  collections = await fetchCollections();
+  await loadInitialSegments();
+}
+
+document.addEventListener("DOMContentLoaded", init);

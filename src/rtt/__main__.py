@@ -59,6 +59,7 @@ def main():
     p_process.add_argument("--title", type=str, default=None)
     p_process.add_argument("--context", type=str, default=None)
     p_process.add_argument("--no-enrich", action="store_true", help="Skip LLM enrichment (no API key needed)")
+    p_process.add_argument("--collection", type=str, default="", help="Collection name for this video")
 
     p_serve = sub.add_parser("serve")
     p_serve.add_argument("directory", type=Path)
@@ -81,6 +82,7 @@ def main():
     p_batch.add_argument("input", type=str, help="JSON file, directory of JSON files, or YouTube channel URL")
     p_batch.add_argument("--output-dir", "-o", type=Path, default=Path("."))
     p_batch.add_argument("--no-enrich", action="store_true")
+    p_batch.add_argument("--collection", type=str, default="", help="Collection name (auto-derived from YouTube channel if omitted)")
 
     args = parser.parse_args()
 
@@ -96,13 +98,14 @@ def main():
             sys.exit(1)
         for video_path, source_url in local:
             pipeline.process(video_path, title=args.title, source_url=source_url,
-                             context=args.context, skip_enrich=args.no_enrich)
+                             context=args.context, skip_enrich=args.no_enrich,
+                             collection=args.collection)
         for url in urls:
             with tempfile.TemporaryDirectory(prefix="rtt_dl_") as tmp:
                 video_path = _download(url, Path(tmp))
                 pipeline.process(video_path, title=args.title, source_url=url,
                                  context=args.context, skip_enrich=args.no_enrich,
-                                 output_dir=args.output_dir)
+                                 output_dir=args.output_dir, collection=args.collection)
 
     elif args.command == "serve":
         runtime.require(needs_ollama=True)
@@ -153,12 +156,14 @@ def main():
             from rtt import youtube
             entries = youtube.channel_video_ids(args.input)
             print(f"Found {len(entries)} videos")
+            col = args.collection or args.input.rstrip("/").split("/")[-1].lstrip("@")
             jobs = [
                 t_mod.VideoJob(
                     video_id=e["id"],
                     title=e["title"],
                     source_url=youtube.video_url(e["id"]),
                     page_url=youtube.video_url(e["id"]),
+                    collection=col,
                 )
                 for e in entries
             ]
@@ -172,6 +177,9 @@ def main():
                 data = json.loads(input_path.read_text())
                 raw = data if isinstance(data, list) else [data]
             jobs = [t_mod.VideoJob(**j) for j in raw]
+            if args.collection:
+                for j in jobs:
+                    j.collection = args.collection
         if not jobs:
             print("No video jobs found.")
             sys.exit(1)

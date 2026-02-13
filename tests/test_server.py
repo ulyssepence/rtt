@@ -23,42 +23,56 @@ class FakeEmbedder:
         return vecs
 
 
+def _make_rtt(tmp: Path, video_id="test", title="Test", source_url="",
+              page_url="", collection="", segments_data=None):
+    frames_dir = tmp / f"{video_id}_frames"
+    frames_dir.mkdir(exist_ok=True)
+
+    if segments_data is None:
+        (frames_dir / "000000.jpg").write_bytes(b"\xff\xd8fake")
+        (frames_dir / "000005.jpg").write_bytes(b"\xff\xd8fake")
+        segments_data = [
+            dict(segment_id=f"{video_id}_00000", start=0.0, end=4.0,
+                 raw="nuclear bomb safety", enriched="nuclear bomb safety enriched",
+                 emb=[1.0] + [0.0] * 767, frame="frames/000000.jpg"),
+            dict(segment_id=f"{video_id}_00001", start=5.0, end=9.0,
+                 raw="chocolate cake recipe", enriched="chocolate cake recipe enriched",
+                 emb=[0.0] * 767 + [1.0], frame="frames/000005.jpg"),
+        ]
+
+    video = t.Video(
+        video_id=video_id, title=title, source_url=source_url,
+        context=title, duration_seconds=10.0, collection=collection,
+        page_url=page_url,
+    )
+    segments = [
+        t.Segment(
+            segment_id=s["segment_id"], video_id=video_id,
+            start_seconds=s["start"], end_seconds=s["end"],
+            transcript_raw=s["raw"], transcript_enriched=s["enriched"],
+            text_embedding=s["emb"], frame_path=s["frame"],
+            collection=collection,
+        )
+        for s in segments_data
+    ]
+    package.create(video, segments, frames_dir, tmp / f"{video_id}.rtt")
+
+
 @pytest.fixture
 def rtt_dir():
     with tempfile.TemporaryDirectory() as tmp:
         tmp = Path(tmp)
-
-        frames_dir = tmp / "build_frames"
-        frames_dir.mkdir()
-        (frames_dir / "000000.jpg").write_bytes(b"\xff\xd8fake")
-        (frames_dir / "000005.jpg").write_bytes(b"\xff\xd8fake")
-
         (tmp / "test.mp4").write_bytes(b"\x00\x00\x00\x1cftypisom")
+        _make_rtt(tmp, video_id="test", title="Test", collection="prelinger")
+        yield tmp
 
-        video = t.Video(
-            video_id="test", title="Test", source_url="",
-            context="Test", duration_seconds=10.0,
-        )
-        segments = [
-            t.Segment(
-                segment_id="test_00000", video_id="test",
-                start_seconds=0.0, end_seconds=4.0,
-                transcript_raw="nuclear bomb safety",
-                transcript_enriched="nuclear bomb safety enriched",
-                text_embedding=[1.0] + [0.0] * 767,
-                frame_path="frames/000000.jpg",
-            ),
-            t.Segment(
-                segment_id="test_00001", video_id="test",
-                start_seconds=5.0, end_seconds=9.0,
-                transcript_raw="chocolate cake recipe",
-                transcript_enriched="chocolate cake recipe enriched",
-                text_embedding=[0.0] * 767 + [1.0],
-                frame_path="frames/000005.jpg",
-            ),
-        ]
 
-        package.create(video, segments, frames_dir, tmp / "test.rtt")
+@pytest.fixture
+def multi_collection_dir():
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        _make_rtt(tmp, video_id="vid1", title="Video 1", collection="prelinger")
+        _make_rtt(tmp, video_id="vid2", title="Video 2", collection="youtube")
         yield tmp
 
 
@@ -66,6 +80,13 @@ def rtt_dir():
 def client(rtt_dir):
     from rtt import server
     app = server.create_app(rtt_dir, embedder=FakeEmbedder())
+    return TestClient(app)
+
+
+@pytest.fixture
+def multi_client(multi_collection_dir):
+    from rtt import server
+    app = server.create_app(multi_collection_dir, embedder=FakeEmbedder())
     return TestClient(app)
 
 
@@ -122,23 +143,90 @@ def test_video_endpoint_404_for_unknown(client):
 def test_source_url_always_uses_video_route():
     with tempfile.TemporaryDirectory() as tmp:
         tmp = Path(tmp)
-        frames_dir = tmp / "build_frames"
-        frames_dir.mkdir()
+        _make_rtt(tmp, video_id="remote", title="Remote",
+                  source_url="https://archive.org/download/test/test.mp4",
+                  segments_data=[
+                      dict(segment_id="remote_00000", start=0.0, end=5.0,
+                           raw="test", enriched="test",
+                           emb=[1.0] + [0.0] * 767, frame="frames/000000.jpg"),
+                  ])
+        frames_dir = tmp / "remote_frames"
+        frames_dir.mkdir(exist_ok=True)
         (frames_dir / "000000.jpg").write_bytes(b"\xff\xd8fake")
-        video = t.Video(
-            video_id="remote", title="Remote", source_url="https://archive.org/download/test/test.mp4",
-            context="Remote", duration_seconds=5.0,
-        )
-        segments = [t.Segment(
-            segment_id="remote_00000", video_id="remote",
-            start_seconds=0.0, end_seconds=5.0,
-            transcript_raw="test", transcript_enriched="test",
-            text_embedding=[1.0] + [0.0] * 767, frame_path="frames/000000.jpg",
-        )]
-        package.create(video, segments, frames_dir, tmp / "remote.rtt")
         from rtt import server
         app = server.create_app(tmp, embedder=FakeEmbedder())
         client = TestClient(app)
         resp = client.get("/search?q=nuclear+bomb")
         r = resp.json()["results"][0]
         assert r["source_url"] == "/video/remote"
+
+
+def test_segments_endpoint(client):
+    resp = client.get("/segments?offset=0&limit=10")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "segments" in data
+    assert data["total"] == 2
+    assert len(data["segments"]) == 2
+    assert data["offset"] == 0
+    assert data["limit"] == 10
+
+
+def test_segments_pagination(client):
+    resp = client.get("/segments?offset=0&limit=1")
+    data = resp.json()
+    assert len(data["segments"]) == 1
+    resp2 = client.get("/segments?offset=1&limit=1")
+    data2 = resp2.json()
+    assert len(data2["segments"]) == 1
+    assert data["segments"][0]["segment_id"] != data2["segments"][0]["segment_id"]
+
+
+def test_collections_endpoint(client):
+    resp = client.get("/collections")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "collections" in data
+    assert len(data["collections"]) >= 1
+
+
+def test_collections_multi(multi_client):
+    resp = multi_client.get("/collections")
+    data = resp.json()
+    ids = {c["id"] for c in data["collections"]}
+    assert "prelinger" in ids
+    assert "youtube" in ids
+
+
+def test_search_by_segment_id(client):
+    resp = client.get("/search?segment_id=test_00000")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data["results"]) > 0
+    assert data["query"] == "similar:test_00000"
+
+
+def test_search_by_segment_id_not_found(client):
+    resp = client.get("/search?segment_id=nonexistent")
+    assert resp.status_code == 404
+
+
+def test_search_collection_filter(multi_client):
+    resp = multi_client.get("/search?q=nuclear+bomb&collections=prelinger")
+    data = resp.json()
+    for r in data["results"]:
+        assert r["collection"] == "prelinger"
+
+
+def test_segments_collection_filter(multi_client):
+    resp = multi_client.get("/segments?collections=youtube")
+    data = resp.json()
+    for s in data["segments"]:
+        assert s["collection"] == "youtube"
+
+
+def test_search_result_has_collection(client):
+    resp = client.get("/search?q=nuclear+bomb")
+    r = resp.json()["results"][0]
+    assert "collection" in r
+    assert r["collection"] == "prelinger"

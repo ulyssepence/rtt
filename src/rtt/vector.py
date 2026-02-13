@@ -2,6 +2,7 @@ import pathlib
 
 import lancedb
 import pyarrow as pa
+import pyarrow.compute
 
 from rtt import types as t
 
@@ -16,6 +17,7 @@ SCHEMA = pa.schema([
     pa.field("frame_path", pa.string()),
     pa.field("has_speech", pa.bool_()),
     pa.field("source", pa.string()),
+    pa.field("collection", pa.string()),
 ])
 
 
@@ -54,6 +56,7 @@ class Database:
                 "frame_path": s.frame_path,
                 "has_speech": s.has_speech,
                 "source": s.source,
+                "collection": s.collection,
             }
             for s in segments
         ]
@@ -64,11 +67,40 @@ class Database:
         if len(data) > 0:
             self._table.add(data)
 
-    def closest(self, query_embedding: list[float], n: int = 10) -> list[dict]:
-        results = (
-            self._table
-            .search(query_embedding)
-            .limit(n)
-            .to_list()
-        )
-        return results
+    def closest(self, query_embedding: list[float], n: int = 10, collections: list[str] | None = None) -> list[dict]:
+        q = self._table.search(query_embedding).limit(n)
+        if collections:
+            filter_expr = " OR ".join(f"collection = '{c}'" for c in collections)
+            q = q.where(f"({filter_expr})")
+        return q.to_list()
+
+    def get_segment(self, segment_id: str) -> dict | None:
+        rows = self._table.search().where(f"segment_id = '{segment_id}'").limit(1).to_list()
+        return rows[0] if rows else None
+
+    def list_segments(self, offset: int = 0, limit: int = 50, collections: list[str] | None = None) -> list[dict]:
+        table = self._table.to_arrow()
+        if collections:
+            col = table.column("collection")
+            mask = None
+            for c in collections:
+                m = pa.compute.equal(col, c)
+                mask = m if mask is None else pa.compute.or_(mask, m)
+            table = table.filter(mask)
+        table = table.slice(offset, limit)
+        names = table.schema.names
+        return [
+            {name: table.column(name)[i].as_py() for name in names}
+            for i in range(table.num_rows)
+        ]
+
+    def count(self, collections: list[str] | None = None) -> int:
+        table = self._table.to_arrow()
+        if collections:
+            col = table.column("collection")
+            mask = None
+            for c in collections:
+                m = pa.compute.equal(col, c)
+                mask = m if mask is None else pa.compute.or_(mask, m)
+            table = table.filter(mask)
+        return table.num_rows
