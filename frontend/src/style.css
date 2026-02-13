@@ -116,7 +116,7 @@ body {
   margin-top: 0.5rem;
   line-height: 1.4;
   display: -webkit-box;
-  -webkit-line-clamp: 2;
+  -webkit-line-clamp: 6;
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
@@ -153,6 +153,19 @@ body {
 .player-container video {
   width: 100%;
   border-radius: 4px;
+}
+
+.source-link {
+  display: inline-block;
+  margin-top: 0.5rem;
+  font-size: 0.8rem;
+  color: #888;
+  text-decoration: none;
+  transition: color 0.2s;
+}
+
+.source-link:hover {
+  color: #ccc;
 }
 
 .result-card.weak-match {

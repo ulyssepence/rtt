@@ -30,17 +30,19 @@ All code in `src/rtt/`, flat structure. Types in `types.py`. Qualified imports: 
 
 | Module | Key types | External deps |
 |--------|-----------|---------------|
-| `types.py` | `Segment`, `Video` dataclasses | — |
-| `transcribe.py` | `Transcriber` protocol, `WhisperTranscriber` | faster-whisper (local) |
+| `types.py` | `Segment`, `Video`, `VideoJob` dataclasses | — |
+| `transcribe.py` | `Transcriber` protocol, `WhisperTranscriber`, `AssemblyAITranscriber` | faster-whisper (local), AssemblyAI API |
 | `enrich.py` | `Enricher` protocol, `ClaudeEnricher` | Anthropic API |
 | `embed.py` | `Embedder` protocol, `OllamaEmbedder` | Ollama HTTP (localhost:11434) |
-| `frames.py` | `extract()` | FFmpeg (system binary) |
+| `frames.py` | `extract()`, `extract_remote()` | FFmpeg (system binary) |
 | `vector.py` | `Database` (wraps LanceDB) | lancedb, pyarrow |
 | `package.py` | `create()`, `load()` | pyarrow, zipfile |
 | `server.py` | `create_app()` → FastAPI | fastapi, uvicorn |
-| `main.py` | `process()` — pipeline orchestrator | wires all above |
+| `main.py` | `process()` — local pipeline orchestrator | wires all above |
+| `batch.py` | `process_batch()` — async batch pipeline | wires all above |
+| `youtube.py` | `channel_video_ids()`, `RealDownloader` | yt-dlp |
 | `runtime.py` | `check()`, `require()`, `ensure_whisper()` | — |
-| `__main__.py` | CLI: `process`, `serve`, `transcribe`, `enrich`, `embed` | argparse |
+| `__main__.py` | CLI: `process`, `serve`, `batch`, `transcribe`, `enrich`, `embed` | argparse |
 
 ## The `.rtt` format
 
@@ -48,7 +50,12 @@ Zip archive containing `manifest.json` + `segments.parquet` + `frames/*.jpg`. Th
 
 ## Pipeline status tracking
 
-`main.process()` writes a `.rtt.json` sidecar during processing: `new → transcribed → enriched → embedded → ready`. Pipeline is resumable — skips completed stages. On completion, packages into `.rtt` and cleans up intermediates.
+Both `main.process()` and `batch.process_batch()` write `.rtt.json` sidecars during processing: `new → downloaded → transcribed → enriched → embedded → ready`. Pipeline is resumable — picks up from the last completed stage. On completion, packages into `.rtt` and cleans up intermediates (sidecar, frames dir, audio/video files).
+
+## Two pipelines
+
+- **Local** (`main.process`): for local files. Uses Whisper (local transcription), processes sequentially.
+- **Batch** (`batch.process_batch`): for YouTube channels and bulk jobs. Uses AssemblyAI (cloud transcription), processes concurrently. Downloads audio first (small), transcribes, deletes audio, then downloads video for frame extraction, deletes video. Keeps disk usage low.
 
 ## Running
 
@@ -60,6 +67,8 @@ uv run rtt process https://archive.org/download/Film/film.mp4  # URL → downloa
 uv run rtt process a.mp4 dir/ https://url/v.mp4 # mix files, dirs, URLs
 uv run rtt process video.mp4 --no-enrich        # skip Claude enrichment
 uv run rtt process url -o out/                  # override output dir for URL .rtt files
+uv run rtt batch "https://www.youtube.com/@channel" -o out/  # YouTube channel → batch process all videos
+uv run rtt batch jobs.json -o out/              # batch from JSON manifest
 uv run rtt serve data/sample/                   # start server
 uv run rtt transcribe video.mp4                 # single stage
 ```
