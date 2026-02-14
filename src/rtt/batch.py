@@ -57,6 +57,7 @@ class _Job:
     status: dict = field(default_factory=dict)
     segments: list[t.Segment] = field(default_factory=list)
     error: str | None = None
+    queued_at: dict[str, float] = field(default_factory=dict)
 
 
 async def process_batch(
@@ -102,31 +103,8 @@ async def process_batch(
         while True:
             j = await q_transcribe.get()
             vid = j.job.video_id
+            waited = time.monotonic() - j.queued_at.get("transcribe", time.monotonic())
             try:
-                status = _load_status(output_dir, vid)
-                j.status = status
-
-                if status.get("status") != "new":
-                    j.segments = [
-                        t.Segment(segment_id=s["segment_id"], video_id=vid,
-                                  start_seconds=s["start"], end_seconds=s["end"],
-                                  transcript_raw=s["text"])
-                        for s in status["segments"]
-                    ]
-                    print(f"[{vid}] Resuming from {status['status']}")
-                    if status.get("status") == "transcribed":
-                        q_enrich.put_nowait(j)
-                    elif status.get("status") == "enriched":
-                        for seg, e in zip(j.segments, status.get("enriched", [])):
-                            seg.transcript_enriched = e
-                        q_embed.put_nowait(j)
-                    else:
-                        for seg, e in zip(j.segments, status.get("enriched", [])):
-                            seg.transcript_enriched = e
-                        q_embed.put_nowait(j)
-                    q_transcribe.task_done()
-                    continue
-
                 segments = None
                 if _is_youtube(j):
                     print(f"[{vid}] Trying YouTube subtitles...")
@@ -153,7 +131,7 @@ async def process_batch(
                     segments = await asyncio.to_thread(
                         aai_transcriber.transcribe_url, transcribe_source, vid,
                     )
-                    print(f"[{vid}] Transcribed in {time.monotonic() - t0:.0f}s")
+                    print(f"[{vid}] Transcribed in {time.monotonic() - t0:.0f}s (waited {waited:.0f}s)")
                     audio_path.unlink(missing_ok=True)
                     if not segments:
                         await _log_failure(j.job, "No segments returned")
@@ -178,6 +156,7 @@ async def process_batch(
                 j.status["status"] = "transcribed"
                 _save_status(output_dir, vid, j.status)
                 print(f"[{vid}] Transcribed ({len(segments)} segments)")
+                j.queued_at["enrich"] = time.monotonic()
                 q_enrich.put_nowait(j)
             except Exception as exc:
                 await _log_failure(j.job, f"{type(exc).__name__}: {exc}")
@@ -189,6 +168,7 @@ async def process_batch(
         while True:
             j = await q_enrich.get()
             vid = j.job.video_id
+            waited = time.monotonic() - j.queued_at.get("enrich", time.monotonic())
             try:
                 if skip_enrich:
                     for seg in j.segments:
@@ -205,7 +185,8 @@ async def process_batch(
                     j.status["enriched"] = [s.transcript_enriched for s in j.segments]
                     j.status["status"] = "enriched"
                     _save_status(output_dir, vid, j.status)
-                    print(f"[{vid}] Enriched in {time.monotonic() - t0:.0f}s")
+                    print(f"[{vid}] Enriched in {time.monotonic() - t0:.0f}s (waited {waited:.0f}s)")
+                j.queued_at["embed"] = time.monotonic()
                 q_embed.put_nowait(j)
             except Exception as exc:
                 await _log_failure(j.job, f"{type(exc).__name__}: {exc}")
@@ -217,6 +198,7 @@ async def process_batch(
         while True:
             j = await q_embed.get()
             vid = j.job.video_id
+            waited = time.monotonic() - j.queued_at.get("embed", time.monotonic())
             try:
                 t0 = time.monotonic()
                 print(f"[{vid}] Embedding...")
@@ -224,9 +206,11 @@ async def process_batch(
                 embeddings = await asyncio.to_thread(embedder.embed_batch, texts)
                 for seg, emb in zip(j.segments, embeddings):
                     seg.text_embedding = emb
+                j.status["embeddings"] = embeddings
                 j.status["status"] = "embedded"
                 _save_status(output_dir, vid, j.status)
-                print(f"[{vid}] Embedded in {time.monotonic() - t0:.0f}s")
+                print(f"[{vid}] Embedded in {time.monotonic() - t0:.0f}s (waited {waited:.0f}s)")
+                j.queued_at["frames"] = time.monotonic()
                 q_frames.put_nowait(j)
             except Exception as exc:
                 await _log_failure(j.job, f"{type(exc).__name__}: {exc}")
@@ -239,6 +223,7 @@ async def process_batch(
         while True:
             j = await q_frames.get()
             vid = j.job.video_id
+            waited = time.monotonic() - j.queued_at.get("frames", time.monotonic())
             video_path = output_dir / f"{vid}.video"
             try:
                 rtt_path = output_dir / f"{vid}.rtt"
@@ -258,9 +243,10 @@ async def process_batch(
                     video_path.unlink(missing_ok=True)
                 else:
                     print(f"[{vid}] Extracting remote frames...")
-                    remote_url = j.job.source_url
-                    frame_paths = await frames.extract_remote(remote_url, timestamps, fd)
-                print(f"[{vid}] Frames done in {time.monotonic() - t0:.0f}s")
+                    frame_paths = await frames.extract_remote(
+                        j.job.source_url, timestamps, fd,
+                    )
+                print(f"[{vid}] Frames done in {time.monotonic() - t0:.0f}s (waited {waited:.0f}s)")
                 for seg, fp in zip(j.segments, frame_paths):
                     seg.frame_path = f"frames/{fp.name}" if fp else ""
 
@@ -286,7 +272,18 @@ async def process_batch(
                 print(f"[{vid}] FAILED: {exc}")
             q_frames.task_done()
 
+    batch_start = time.monotonic()
+
+    async def status_printer():
+        while True:
+            await asyncio.sleep(10)
+            elapsed = time.monotonic() - batch_start
+            mins = int(elapsed // 60)
+            secs = int(elapsed % 60)
+            print(f"[status] queues: transcribe={q_transcribe.qsize()} enrich={q_enrich.qsize()} embed={q_embed.qsize()} frames={q_frames.qsize()} | done={done_count}/{total} | {mins}m{secs}s elapsed")
+
     workers = []
+    workers.append(asyncio.create_task(status_printer()))
     for _ in range(concurrency_transcribe):
         workers.append(asyncio.create_task(transcribe_worker()))
     for _ in range(concurrency_enrich):
@@ -297,6 +294,7 @@ async def process_batch(
         workers.append(asyncio.create_task(frames_worker()))
 
     skipped = 0
+    deferred_new = []
     for job in jobs:
         rtt_path = output_dir / f"{job.video_id}.rtt"
         if rtt_path.exists():
@@ -304,7 +302,40 @@ async def process_batch(
             results.append(rtt_path)
             skipped += 1
             continue
-        q_transcribe.put_nowait(_Job(job=job))
+        status = _load_status(output_dir, job.video_id)
+        if status.get("status") == "new":
+            deferred_new.append(job)
+        else:
+            j = _Job(job=job)
+            st = status.get("status")
+            j.status = status
+            j.segments = [
+                t.Segment(segment_id=s["segment_id"], video_id=job.video_id,
+                          start_seconds=s["start"], end_seconds=s["end"],
+                          transcript_raw=s["text"])
+                for s in status["segments"]
+            ]
+            if st == "transcribed":
+                j.queued_at["enrich"] = time.monotonic()
+                q_enrich.put_nowait(j)
+            elif st in ("enriched", "embedded"):
+                for seg, e in zip(j.segments, status.get("enriched", [])):
+                    seg.transcript_enriched = e
+                if st == "embedded":
+                    for seg, emb in zip(j.segments, status.get("embeddings", [])):
+                        seg.text_embedding = emb
+                    j.queued_at["frames"] = time.monotonic()
+                    q_frames.put_nowait(j)
+                else:
+                    j.queued_at["embed"] = time.monotonic()
+                    q_embed.put_nowait(j)
+            else:
+                deferred_new.append(job)
+            print(f"[{job.video_id}] Resuming from {st}")
+    for job in deferred_new:
+        j = _Job(job=job)
+        j.queued_at["transcribe"] = time.monotonic()
+        q_transcribe.put_nowait(j)
 
     await q_transcribe.join()
     await q_enrich.join()
