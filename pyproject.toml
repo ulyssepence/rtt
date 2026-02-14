@@ -6,8 +6,8 @@ requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.115",
     "uvicorn>=0.34",
-    "lancedb>=0.20",
     "pyarrow>=18",
+    "numpy>=1.24",
     "python-dotenv>=1.0",
     "anthropic>=0.43",
     "faster-whisper>=1.1",

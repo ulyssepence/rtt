@@ -61,6 +61,32 @@ def create(video: t.Video, segments: list[t.Segment], frames_dir: Path | None, o
     return output_path
 
 
+def load_metadata(rtt_path: Path) -> tuple[t.Video, pa.Table]:
+    with zipfile.ZipFile(rtt_path, "r") as zf:
+        manifest = json.loads(zf.read("manifest.json"))
+        pq_bytes = zf.read("segments.parquet")
+
+    source_url = manifest.get("source_url", "")
+    page_url = manifest.get("page_url", "")
+    if not page_url and ("youtube.com/" in source_url or "youtu.be/" in source_url):
+        page_url = source_url
+
+    video = t.Video(
+        video_id=manifest["video_id"],
+        title=manifest["title"],
+        source_url=source_url,
+        page_url=page_url,
+        collection=manifest.get("collection", ""),
+        context=manifest["context"],
+        duration_seconds=manifest["duration_seconds"],
+        status=manifest["status"],
+    )
+
+    buf = pa.py_buffer(pq_bytes)
+    table = pq.read_table(pa.BufferReader(buf))
+    return video, table
+
+
 def load(rtt_path: Path) -> tuple[t.Video, list[t.Segment], pa.Table]:
     with zipfile.ZipFile(rtt_path, "r") as zf:
         manifest = json.loads(zf.read("manifest.json"))

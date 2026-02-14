@@ -8,7 +8,10 @@ from fastapi.responses import FileResponse, JSONResponse, Response, StreamingRes
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from rtt import embed, package, types as t, vector
+import pyarrow as pa
+import pyarrow.compute
+
+from rtt import embed, package, vector
 
 
 class SegmentResult(BaseModel):
@@ -65,18 +68,32 @@ def create_app(rtt_paths: Path | list[Path], embedder: embed.Embedder | None = N
     videos: dict[str, dict] = {}
     rtt_paths_by_video: dict[str, Path] = {}
 
+    def _mem_mb() -> int:
+        import resource, sys
+        rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        return rss // 1024 if sys.platform == "linux" else rss // (1024 * 1024)
+
     t0 = time.monotonic()
-    all_segments: list[t.Segment] = []
+    total_segments = 0
     if isinstance(rtt_paths, Path):
         rtt_paths = [rtt_paths]
-    for rtt_path in _collect_rtt_files(rtt_paths):
-        vid, segments, arrow_table = package.load(rtt_path)
+    rtt_files = _collect_rtt_files(rtt_paths)
+    print(f"Found {len(rtt_files)} .rtt files, RSS={_mem_mb()}MB")
+    for i, rtt_path in enumerate(rtt_files):
+        if i % 100 == 0:
+            print(f"  loading {i}/{len(rtt_files)} RSS={_mem_mb()}MB")
+        vid, arrow_table = package.load_metadata(rtt_path)
 
-        embeddings = arrow_table.column("text_embedding").to_pylist()
-        bad = [e for e in embeddings if len(e) != 768]
-        if bad:
-            print(f"Skipping {rtt_path.name}: {len(bad)}/{len(embeddings)} embeddings have wrong dimensions ({set(len(e) for e in bad)})")
+        emb_type = arrow_table.schema.field("text_embedding").type
+        if hasattr(emb_type, "list_size") and emb_type.list_size != 768:
+            print(f"Skipping {rtt_path.name}: embeddings have dimension {emb_type.list_size}, expected 768")
             continue
+        if not hasattr(emb_type, "list_size"):
+            lengths = pa.compute.list_value_length(arrow_table.column("text_embedding"))
+            bad_count = pa.compute.sum(pa.compute.not_equal(lengths, 768)).as_py()
+            if bad_count:
+                print(f"Skipping {rtt_path.name}: {bad_count}/{len(arrow_table)} embeddings have wrong dimensions")
+                continue
 
         videos[vid.video_id] = {
             "title": vid.title,
@@ -86,15 +103,11 @@ def create_app(rtt_paths: Path | list[Path], embedder: embed.Embedder | None = N
             "local_dir": rtt_path.parent,
         }
         rtt_paths_by_video[vid.video_id] = rtt_path
-
-        for seg, emb in zip(segments, embeddings):
-            seg.text_embedding = emb
-            all_segments.append(seg)
+        db.add_table(arrow_table)
+        total_segments += len(arrow_table)
 
     t_load = time.monotonic()
-    print(f"Parsed {len(videos)} files in {(t_load - t0) * 1000:.0f}ms")
-    db.add(all_segments)
-    print(f"Indexed {len(all_segments)} segments in {(time.monotonic() - t_load) * 1000:.0f}ms")
+    print(f"Loaded {len(videos)} files, {total_segments} segments in {(t_load - t0) * 1000:.0f}ms, RSS={_mem_mb()}MB")
 
     frontend_dist = Path(__file__).parent.parent.parent / "frontend" / "dist"
     if frontend_dist.exists():

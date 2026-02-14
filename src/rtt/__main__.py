@@ -51,8 +51,9 @@ def _resolve_local(raw_args: list[str]) -> tuple[list[tuple[Path, str]], list[st
 
 def main():
     parser = argparse.ArgumentParser(prog="rtt")
-    parser.add_argument("--ollama-url", type=str, default=None, help="Ollama API URL (default: $RTT_OLLAMA_URL or http://localhost:11434)")
     sub = parser.add_subparsers(dest="command")
+
+    ollama_url_kwargs = dict(type=str, default=None, help="Ollama API URL (default: $RTT_OLLAMA_URL or http://localhost:11434)")
 
     p_process = sub.add_parser("process")
     p_process.add_argument("paths", nargs="+")
@@ -61,11 +62,13 @@ def main():
     p_process.add_argument("--context", type=str, default=None)
     p_process.add_argument("--no-enrich", action="store_true", help="Skip LLM enrichment (no API key needed)")
     p_process.add_argument("--collection", type=str, default="", help="Collection name for this video")
+    p_process.add_argument("--ollama-url", **ollama_url_kwargs)
 
     p_serve = sub.add_parser("serve")
     p_serve.add_argument("paths", nargs="+", type=Path, help=".rtt files or directories containing them")
     p_serve.add_argument("--host", default="0.0.0.0")
     p_serve.add_argument("--port", type=int, default=8000)
+    p_serve.add_argument("--ollama-url", **ollama_url_kwargs)
 
     p_transcribe = sub.add_parser("transcribe")
     p_transcribe.add_argument("path", type=Path)
@@ -75,6 +78,7 @@ def main():
 
     p_embed = sub.add_parser("embed")
     p_embed.add_argument("path", type=Path)
+    p_embed.add_argument("--ollama-url", **ollama_url_kwargs)
 
     p_channel = sub.add_parser("channel", help="List video IDs from a YouTube channel")
     p_channel.add_argument("url", type=str)
@@ -89,11 +93,12 @@ def main():
     p_batch.add_argument("--enrichments", type=int, default=10, help="Max concurrent enrichments (default: 10)")
     p_batch.add_argument("--embeddings", type=int, default=3, help="Max concurrent embeddings (default: 3)")
     p_batch.add_argument("--frames", type=int, default=3, help="Max concurrent frame extractions — each downloads a full video to disk (default: 3)")
+    p_batch.add_argument("--ollama-url", **ollama_url_kwargs)
 
     args = parser.parse_args()
 
     from rtt import runtime
-    if args.ollama_url:
+    if getattr(args, "ollama_url", None):
         runtime.OLLAMA_URL = args.ollama_url
 
     if args.command == "process":
@@ -116,10 +121,18 @@ def main():
                                  output_dir=args.output_dir, collection=args.collection)
 
     elif args.command == "serve":
+        import resource, sys as _sys
+        def _rss():
+            rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+            return rss // 1024 if _sys.platform == "linux" else rss // (1024 * 1024)
+        print(f"[serve] start RSS={_rss()}MB", flush=True)
         runtime.require(needs_ollama=True)
+        print(f"[serve] imports starting RSS={_rss()}MB", flush=True)
         import uvicorn
         from rtt import server
+        print(f"[serve] imports done RSS={_rss()}MB", flush=True)
         app = server.create_app(args.paths)
+        print(f"[serve] app ready RSS={_rss()}MB", flush=True)
         uvicorn.run(app, host=args.host, port=args.port)
 
     elif args.command == "transcribe":

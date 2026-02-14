@@ -1,91 +1,128 @@
-import pathlib
-
-import lancedb
+import numpy as np
 import pyarrow as pa
 import pyarrow.compute
 
 from rtt import types as t
 
-SCHEMA = pa.schema([
-    pa.field("segment_id", pa.string()),
-    pa.field("video_id", pa.string()),
-    pa.field("start_seconds", pa.float64()),
-    pa.field("end_seconds", pa.float64()),
-    pa.field("transcript_raw", pa.string()),
-    pa.field("transcript_enriched", pa.string()),
-    pa.field("text_embedding", pa.list_(pa.float32(), 768)),
-    pa.field("frame_path", pa.string()),
-    pa.field("has_speech", pa.bool_()),
-    pa.field("source", pa.string()),
-    pa.field("collection", pa.string()),
-])
-
 
 class Database:
-    def __init__(self, db: lancedb.DBConnection, table: lancedb.table.Table):
-        self._db = db
-        self._table = table
+    def __init__(self):
+        self._tables: list[pa.Table] = []
+        self._merged: pa.Table | None = None
+        self._embeddings: np.ndarray | None = None
+        self._norms: np.ndarray | None = None
 
-    @classmethod
-    def load(cls, path: str | pathlib.Path) -> "Database":
-        db = lancedb.connect(str(path))
-        if "segments" in db.table_names():
-            table = db.open_table("segments")
-        else:
-            table = db.create_table("segments", schema=SCHEMA)
-        return cls(db, table)
+    def _invalidate(self):
+        self._merged = None
+        self._embeddings = None
+        self._norms = None
+
+    def _ensure_merged(self) -> pa.Table | None:
+        if self._merged is not None:
+            return self._merged
+        if not self._tables:
+            return None
+        self._merged = pa.concat_tables(self._tables)
+        emb_col = self._merged.column("text_embedding")
+        self._embeddings = np.array(emb_col.to_pylist(), dtype=np.float32)
+        self._norms = np.linalg.norm(self._embeddings, axis=1, keepdims=True)
+        self._norms = np.where(self._norms == 0, 1, self._norms)
+        return self._merged
 
     @classmethod
     def memory(cls) -> "Database":
-        db = lancedb.connect("memory://")
-        table = db.create_table("segments", schema=SCHEMA)
-        return cls(db, table)
+        return cls()
 
     def add(self, segments: list[t.Segment]) -> None:
         if not segments:
             return
-        rows = [
-            {
-                "segment_id": s.segment_id,
-                "video_id": s.video_id,
-                "start_seconds": s.start_seconds,
-                "end_seconds": s.end_seconds,
-                "transcript_raw": s.transcript_raw,
-                "transcript_enriched": s.transcript_enriched,
-                "text_embedding": s.text_embedding,
-                "frame_path": s.frame_path,
-                "has_speech": s.has_speech,
-                "source": s.source,
-                "collection": s.collection,
-            }
-            for s in segments
-        ]
-        self._table.add(rows)
+        table = pa.table({
+            "segment_id": [s.segment_id for s in segments],
+            "video_id": [s.video_id for s in segments],
+            "start_seconds": [s.start_seconds for s in segments],
+            "end_seconds": [s.end_seconds for s in segments],
+            "transcript_raw": [s.transcript_raw for s in segments],
+            "transcript_enriched": [s.transcript_enriched for s in segments],
+            "text_embedding": [s.text_embedding for s in segments],
+            "frame_path": [s.frame_path for s in segments],
+            "has_speech": [s.has_speech for s in segments],
+            "source": [s.source for s in segments],
+            "collection": [s.collection for s in segments],
+        })
+        self._tables.append(table)
+        self._invalidate()
+
+    def add_table(self, table: pa.Table) -> None:
+        if len(table) == 0:
+            return
+        self._tables.append(table)
+        self._invalidate()
 
     def merge(self, other: "Database") -> None:
-        data = other._table.to_arrow()
-        if len(data) > 0:
-            self._table.add(data)
+        other_table = other._ensure_merged()
+        if other_table is not None:
+            self.add_table(other_table)
 
     def closest(self, query_embedding: list[float], n: int = 10, collections: list[str] | None = None) -> list[dict]:
-        q = self._table.search(query_embedding).limit(n)
-        if collections:
-            filter_expr = " OR ".join(f"collection = '{c}'" for c in collections)
-            q = q.where(f"({filter_expr})")
-        return q.to_list()
+        table = self._ensure_merged()
+        if table is None:
+            return []
+        q = np.array(query_embedding, dtype=np.float32)
+        q_norm = np.linalg.norm(q)
+        if q_norm == 0:
+            return []
+        q = q / q_norm
+        scores = (self._embeddings / self._norms) @ q
 
-    def get_segment(self, segment_id: str) -> dict | None:
-        rows = self._table.search().where(f"segment_id = '{segment_id}'").limit(1).to_list()
-        return rows[0] if rows else None
-
-    def list_segments(self, offset: int = 0, limit: int = 50, collections: list[str] | None = None) -> list[dict]:
-        table = self._table.to_arrow()
         if collections:
             col = table.column("collection")
             mask = None
             for c in collections:
-                m = pa.compute.equal(col, c)
-                mask = m if mask is None else pa.compute.or_(mask, m)
+                m = pyarrow.compute.equal(col, c)
+                mask = m if mask is None else pyarrow.compute.or_(mask, m)
+            filter_mask = mask.to_pylist()
+            scores = np.where(filter_mask, scores, -np.inf)
+
+        n = min(n, len(scores))
+        if n >= len(scores):
+            top_idx = np.argsort(-scores)
+        else:
+            top_idx = np.argpartition(-scores, n)[:n]
+            top_idx = top_idx[np.argsort(-scores[top_idx])]
+
+        names = [f.name for f in table.schema if f.name != "text_embedding"]
+        results = []
+        for idx in top_idx:
+            if scores[idx] == -np.inf:
+                break
+            row = {name: table.column(name)[int(idx)].as_py() for name in names}
+            row["text_embedding"] = self._embeddings[int(idx)].tolist()
+            row["_distance"] = 1.0 - float(scores[idx])
+            results.append(row)
+        return results
+
+    def get_segment(self, segment_id: str) -> dict | None:
+        table = self._ensure_merged()
+        if table is None:
+            return None
+        col = table.column("segment_id")
+        mask = pyarrow.compute.equal(col, segment_id)
+        filtered = table.filter(mask)
+        if filtered.num_rows == 0:
+            return None
+        names = filtered.schema.names
+        return {name: filtered.column(name)[0].as_py() for name in names}
+
+    def list_segments(self, offset: int = 0, limit: int = 50, collections: list[str] | None = None) -> list[dict]:
+        table = self._ensure_merged()
+        if table is None:
+            return []
+        if collections:
+            col = table.column("collection")
+            mask = None
+            for c in collections:
+                m = pyarrow.compute.equal(col, c)
+                mask = m if mask is None else pyarrow.compute.or_(mask, m)
             table = table.filter(mask)
         table = table.slice(offset, limit)
         names = table.schema.names
@@ -95,12 +132,14 @@ class Database:
         ]
 
     def count(self, collections: list[str] | None = None) -> int:
-        table = self._table.to_arrow()
+        table = self._ensure_merged()
+        if table is None:
+            return 0
         if collections:
             col = table.column("collection")
             mask = None
             for c in collections:
-                m = pa.compute.equal(col, c)
-                mask = m if mask is None else pa.compute.or_(mask, m)
+                m = pyarrow.compute.equal(col, c)
+                mask = m if mask is None else pyarrow.compute.or_(mask, m)
             table = table.filter(mask)
         return table.num_rows
