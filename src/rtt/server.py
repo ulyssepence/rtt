@@ -69,6 +69,13 @@ def create_app(rtt_paths: Path | list[Path], embedder: embed.Embedder | None = N
         rtt_paths = [rtt_paths]
     for rtt_path in _collect_rtt_files(rtt_paths):
         vid, segments, arrow_table = package.load(rtt_path)
+
+        embeddings = arrow_table.column("text_embedding").to_pylist()
+        bad = [e for e in embeddings if len(e) != 768]
+        if bad:
+            print(f"Skipping {rtt_path.name}: {len(bad)}/{len(embeddings)} embeddings have wrong dimensions ({set(len(e) for e in bad)})")
+            continue
+
         videos[vid.video_id] = {
             "title": vid.title,
             "remote_url": vid.source_url or None,
@@ -78,7 +85,6 @@ def create_app(rtt_paths: Path | list[Path], embedder: embed.Embedder | None = N
         }
 
         seg_objects = []
-        embeddings = arrow_table.column("text_embedding").to_pylist()
         for seg, emb in zip(segments, embeddings):
             seg.text_embedding = emb
             seg_objects.append(seg)
