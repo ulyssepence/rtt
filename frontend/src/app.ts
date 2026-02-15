@@ -10,6 +10,7 @@ interface SegmentResult {
   frame_url: string | null;
   page_url: string | null;
   collection: string;
+  context: string;
   score: number;
 }
 
@@ -217,6 +218,7 @@ function renderVideoOverlay(): string {
           ${seg.page_url ? `<a class="overlay-source" href="${esc(seg.page_url)}" target="_blank" rel="noopener">View source</a>` : ""}
           <div class="overlay-time">${formatTime(seg.start_seconds)} — ${formatTime(seg.end_seconds)}</div>
           <p class="overlay-transcript">${esc(seg.transcript_raw)}</p>
+          ${seg.context ? `<p class="overlay-context">${esc(seg.context).replace(/\n/g, '<br>')}</p>` : ""}
         </div>
       </div>
     </div>

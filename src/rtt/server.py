@@ -26,6 +26,7 @@ class SegmentResult(BaseModel):
     frame_url: str | None = None
     page_url: str | None = None
     collection: str = ""
+    context: str = ""
     score: float = 0.0
 
 
@@ -100,6 +101,7 @@ def create_app(rtt_paths: Path | list[Path], embedder: embed.Embedder | None = N
             "remote_url": vid.source_url or None,
             "page_url": vid.page_url or None,
             "collection": vid.collection,
+            "context": vid.context or "",
             "local_dir": rtt_path.parent,
         }
         rtt_paths_by_video[vid.video_id] = rtt_path
@@ -134,6 +136,7 @@ def create_app(rtt_paths: Path | list[Path], embedder: embed.Embedder | None = N
             frame_url=frame_url,
             page_url=vid_info.get("page_url"),
             collection=vid_info.get("collection", ""),
+            context=vid_info.get("context", ""),
             score=score,
         )
 
