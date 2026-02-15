@@ -93,6 +93,7 @@ Tests requiring external services (Whisper, Ollama, Anthropic) hit real services
 - **No DI framework** — `main.py` instantiates and wires implementations directly
 - **Flat file structure** — no nested packages
 - **Qualified imports** — `from rtt import embed; embed.OllamaEmbedder`
+- **`uv run python`** over raw `python3` — always use `uv run python` to ensure the project venv
 
 ## Frontend
 
