@@ -311,6 +311,10 @@ body {
   min-width: 0;
   padding-top: 0.5rem;
   overflow-y: auto;
+  scrollbar-width: none;
+}
+.overlay-info::-webkit-scrollbar {
+  display: none;
 }
 
 .overlay-title {
