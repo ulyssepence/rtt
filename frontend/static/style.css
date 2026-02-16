@@ -133,6 +133,26 @@ body {
   font-size: 0.7rem;
 }
 
+.filter-only {
+  background: none;
+  border: 1px solid transparent;
+  background-color: #555;
+  color: #fff;
+  font-size: 0.65rem;
+  cursor: pointer;
+  padding: 0.1rem 0.3rem;
+  border-radius: 3px;
+  opacity: 0;
+  transition: opacity 0.15s, color 0.15s;
+}
+
+.filter-item:hover .filter-only { opacity: 1; }
+
+.filter-only:hover {
+  color: #ccc;
+  border-color: #444;
+}
+
 /* --- Infinite canvas --- */
 
 .viewport {
@@ -334,6 +354,13 @@ body {
   color: #999;
   line-height: 1.5;
   margin-bottom: 0.75rem;
+}
+
+.overlay-context {
+  font-size: 0.85rem;
+  font-style: italic;
+  color: #777;
+  line-height: 1.5;
 }
 
 .overlay-collection {

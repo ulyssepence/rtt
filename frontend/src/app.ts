@@ -234,6 +234,7 @@ function renderFilterPanel(): string {
         <label class="filter-item">
           <input type="checkbox" data-collection="${esc(c.id)}" ${activeCollections.has(c.id) ? "checked" : ""} />
           <span>${esc(c.id || "(no collection)")}</span>
+          <button class="filter-only" data-only-collection="${esc(c.id)}">only</button>
           <span class="filter-count">${c.video_count} videos, ${c.segment_count} segments</span>
         </label>
       `).join("")}
@@ -603,6 +604,28 @@ function bindEvents() {
         await loadInitialSegments();
       } else if (mode === "search" && query) {
         searchResults = await fetchSearch(query);
+        render();
+      }
+    });
+  });
+
+  document.querySelectorAll(".filter-only").forEach(btn => {
+    btn.addEventListener("click", async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const col = (e.target as HTMLElement).dataset.onlyCollection!;
+      if (activeCollections.size === 1 && activeCollections.has(col)) {
+        activeCollections = new Set(collections.map(c => c.id));
+      } else {
+        activeCollections = new Set([col]);
+      }
+      if (mode === "browse") {
+        browseOffset = 0;
+        await loadInitialSegments();
+      } else if (mode === "search" && query) {
+        searchResults = await fetchSearch(query);
+        render();
+      } else {
         render();
       }
     });

@@ -1,3 +1,5 @@
+import random
+
 import numpy as np
 import pyarrow as pa
 import pyarrow.compute
@@ -22,7 +24,9 @@ class Database:
             return self._merged
         if not self._tables:
             return None
-        self._merged = pa.concat_tables(self._tables)
+        tables = list(self._tables)
+        random.shuffle(tables)
+        self._merged = pa.concat_tables(tables)
         emb_col = self._merged.column("text_embedding")
         self._embeddings = np.array(emb_col.to_pylist(), dtype=np.float32)
         self._norms = np.linalg.norm(self._embeddings, axis=1, keepdims=True)
