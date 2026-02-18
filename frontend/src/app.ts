@@ -220,7 +220,7 @@ function shuffle(arr: number[]) {
 
 function displaySegments(): SegmentResult[] {
   if (mode === "browse") {
-    return shuffleOrder.map(i => segments[i]);
+    return shuffleOrder.map(i => segments[i]).filter(s => s.frame_url);
   }
   return searchResults;
 }
@@ -342,10 +342,11 @@ function tileSize(cells: CellLayout[]): { w: number; h: number } {
 function padItems(items: SegmentResult[], cols: number): SegmentResult[] {
   if (items.length === 0) return items;
   const minCells = cols * 3;
-  if (items.length >= minCells) return items;
+  const target = Math.max(minCells, Math.ceil(items.length / cols) * cols);
+  if (items.length >= target) return items;
   const padded: SegmentResult[] = [];
-  while (padded.length < minCells) {
-    for (let i = 0; i < items.length && padded.length < minCells; i++) {
+  while (padded.length < target) {
+    for (let i = 0; i < items.length && padded.length < target; i++) {
       padded.push(items[i]);
     }
   }
@@ -371,7 +372,7 @@ function tiledCards(items: SegmentResult[], cols: number, isSearch: boolean): st
         const y = ty * tile.h + c.y;
         const seg = items[i];
         cards.push(`
-          <div class="card" data-idx="${i % originalLen}" style="position:absolute;left:${x}px;top:${y}px;width:${c.w - 4}px;height:${c.h - 4}px;">
+          <div class="card" data-idx="${i % originalLen}" style="position:absolute;left:${x}px;top:${y}px;width:${c.w - 2}px;height:${c.h - 2}px;">
             <div class="card-thumb" data-action="play">
               ${seg.frame_url ? `<img src="${seg.frame_url}" alt="" loading="lazy" />` : `<div class="card-placeholder"></div>`}
             </div>

@@ -38,4 +38,6 @@ dev = [
     "pytest-recording>=0.13",
     "vcrpy>=7",
     "httpx>=0.28",
+    "pytest-playwright>=0.6",
+    "pillow>=12.1.1",
 ]
