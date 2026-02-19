@@ -1,4 +1,8 @@
+import os
 import random
+
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+os.environ.setdefault("MKL_NUM_THREADS", "1")
 
 import numpy as np
 import pyarrow as pa
@@ -10,28 +14,29 @@ from rtt import types as t
 class Database:
     def __init__(self):
         self._tables: list[pa.Table] = []
+        self._embedding_chunks: list[np.ndarray] = []
         self._merged: pa.Table | None = None
         self._embeddings: np.ndarray | None = None
-        self._norms: np.ndarray | None = None
 
     def _invalidate(self):
         self._merged = None
         self._embeddings = None
-        self._norms = None
 
     def _ensure_merged(self) -> pa.Table | None:
         if self._merged is not None:
             return self._merged
         if not self._tables:
             return None
-        tables = list(self._tables)
-        random.shuffle(tables)
+        paired = list(zip(self._tables, self._embedding_chunks))
+        random.shuffle(paired)
+        tables, chunks = zip(*paired)
         self._merged = pa.concat_tables(tables)
-        emb_col = self._merged.column("text_embedding")
-        flat = emb_col.combine_chunks().values.to_numpy(zero_copy_only=False)
-        self._embeddings = flat.astype(np.float32).reshape(-1, 768)
-        self._norms = np.linalg.norm(self._embeddings, axis=1, keepdims=True)
-        self._norms = np.where(self._norms == 0, 1, self._norms)
+        self._embeddings = np.concatenate(chunks)
+        emb32 = self._embeddings.astype(np.float32)
+        norms = np.linalg.norm(emb32, axis=1, keepdims=True)
+        norms = np.where(norms == 0, 1, norms)
+        emb32 /= norms
+        self._embeddings = emb32.astype(np.float16)
         return self._merged
 
     @classmethod
@@ -54,19 +59,23 @@ class Database:
             "source": [s.source for s in segments],
             "collection": [s.collection for s in segments],
         })
-        self._tables.append(table)
-        self._invalidate()
+        self.add_table(table)
 
     def add_table(self, table: pa.Table) -> None:
         if len(table) == 0:
             return
-        self._tables.append(table)
+        emb_col = table.column("text_embedding")
+        flat = emb_col.combine_chunks().values.to_numpy(zero_copy_only=False)
+        self._embedding_chunks.append(flat.astype(np.float16).reshape(-1, 768))
+        self._tables.append(table.drop("text_embedding"))
         self._invalidate()
 
     def merge(self, other: "Database") -> None:
-        other_table = other._ensure_merged()
-        if other_table is not None:
-            self.add_table(other_table)
+        other._ensure_merged()
+        if other._merged is not None and other._embeddings is not None:
+            self._tables.append(other._merged)
+            self._embedding_chunks.append(other._embeddings)
+            self._invalidate()
 
     def closest(self, query_embedding: list[float], n: int = 10, collections: list[str] | None = None) -> list[dict]:
         table = self._ensure_merged()
@@ -77,7 +86,11 @@ class Database:
         if q_norm == 0:
             return []
         q = q / q_norm
-        scores = (self._embeddings / self._norms) @ q
+        scores = np.empty(len(self._embeddings), dtype=np.float32)
+        CHUNK = 20_000
+        for i in range(0, len(self._embeddings), CHUNK):
+            chunk = self._embeddings[i:i + CHUNK].astype(np.float32)
+            scores[i:i + CHUNK] = chunk @ q
 
         if collections:
             col = table.column("collection")
@@ -85,8 +98,8 @@ class Database:
             for c in collections:
                 m = pyarrow.compute.equal(col, c)
                 mask = m if mask is None else pyarrow.compute.or_(mask, m)
-            filter_mask = mask.to_pylist()
-            scores = np.where(filter_mask, scores, -np.inf)
+            filter_np = mask.combine_chunks().to_numpy(zero_copy_only=False)
+            scores[~filter_np] = -np.inf
 
         n = min(n, len(scores))
         if n >= len(scores):
@@ -101,15 +114,13 @@ class Database:
             if scores[idx] == -np.inf:
                 break
             row = {name: table.column(name)[int(idx)].as_py() for name in names}
-            row["text_embedding"] = self._embeddings[int(idx)].tolist()
             row["_distance"] = 1.0 - float(scores[idx])
             results.append(row)
         return results
 
     def compact(self):
-        if self._merged is not None and "text_embedding" in self._merged.schema.names:
-            self._merged = self._merged.drop("text_embedding")
         self._tables.clear()
+        self._embedding_chunks.clear()
 
     def get_segment(self, segment_id: str) -> dict | None:
         table = self._ensure_merged()

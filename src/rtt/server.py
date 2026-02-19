@@ -9,7 +9,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 import pyarrow as pa
-import pyarrow.compute
+import pyarrow.compute as pc
 
 from rtt import embed, package, vector
 
@@ -90,8 +90,8 @@ def create_app(rtt_paths: Path | list[Path], embedder: embed.Embedder | None = N
             print(f"Skipping {rtt_path.name}: embeddings have dimension {emb_type.list_size}, expected 768")
             continue
         if not hasattr(emb_type, "list_size"):
-            lengths = pa.compute.list_value_length(arrow_table.column("text_embedding"))
-            bad_count = pa.compute.sum(pa.compute.not_equal(lengths, 768)).as_py()
+            lengths = pc.list_value_length(arrow_table.column("text_embedding"))
+            bad_count = pc.sum(pc.not_equal(lengths, 768)).as_py()
             if bad_count:
                 print(f"Skipping {rtt_path.name}: {bad_count}/{len(arrow_table)} embeddings have wrong dimensions")
                 continue
