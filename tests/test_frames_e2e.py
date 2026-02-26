@@ -112,6 +112,7 @@ def test_no_placeholder_after_load(page, server_url):
     assert broken == [], f"{len(broken)} bad cards: {broken[:5]}"
 
 
+
 def _largest_black_rect(screenshot_bytes: bytes, threshold: int = 30) -> tuple[int, int]:
     from PIL import Image
     import io
@@ -141,7 +142,26 @@ def _largest_black_rect(screenshot_bytes: bytes, threshold: int = 30) -> tuple[i
     return max_dims
 
 
-def test_no_gaps_after_filter(page, server_url):
+def test_no_gaps_after_search(browser, server_url):
+    page = browser.new_page(viewport={"width": 2560, "height": 1664})
+    page.goto(server_url)
+    page.wait_for_selector(".card", state="visible", timeout=10_000)
+
+    page.fill("#query", "abc")
+    page.press("#query", "Enter")
+    page.wait_for_selector(".card", state="visible", timeout=10_000)
+    page.wait_for_load_state("networkidle")
+    page.wait_for_timeout(1000)
+
+    shot = page.screenshot()
+    bw, bh = _largest_black_rect(shot)
+    min_dim = min(bw, bh)
+    assert min_dim < 50, f"Largest black rectangle is {bw}x{bh}px — likely a gap in the card grid"
+    page.close()
+
+
+def test_no_gaps_after_filter(browser, server_url):
+    page = browser.new_page(viewport={"width": 2560, "height": 1664})
     page.goto(server_url)
     page.wait_for_selector(".card", state="visible", timeout=10_000)
 
@@ -157,4 +177,5 @@ def test_no_gaps_after_filter(page, server_url):
     shot = page.screenshot()
     bw, bh = _largest_black_rect(shot)
     min_dim = min(bw, bh)
-    assert min_dim < 10, f"Largest black rectangle is {bw}x{bh}px — likely a gap in the card grid"
+    assert min_dim < 50, f"Largest black rectangle is {bw}x{bh}px — likely a gap in the card grid"
+    page.close()

@@ -339,10 +339,17 @@ function tileSize(cells: CellLayout[]): { w: number; h: number } {
   return { w: maxX, h: maxY };
 }
 
-function padItems(items: SegmentResult[], cols: number): SegmentResult[] {
+function padItems(items: SegmentResult[], cols: number, isSearch = false): SegmentResult[] {
   if (items.length === 0) return items;
   const minCells = cols * 3;
-  const target = Math.max(minCells, Math.ceil(items.length / cols) * cols);
+  let target: number;
+  if (isSearch && cols >= 2) {
+    const sideSlots = 2 * (cols - 2);
+    const remaining = Math.max(0, items.length - 1 - sideSlots);
+    target = Math.max(minCells, 1 + sideSlots + Math.ceil(remaining / cols) * cols);
+  } else {
+    target = Math.max(minCells, Math.ceil(items.length / cols) * cols);
+  }
   if (items.length >= target) return items;
   const padded: SegmentResult[] = [];
   while (padded.length < target) {
@@ -356,7 +363,7 @@ function padItems(items: SegmentResult[], cols: number): SegmentResult[] {
 function tiledCards(items: SegmentResult[], cols: number, isSearch: boolean): string {
   const originalLen = items.length;
   const wasPadded = items.length < cols * 3;
-  items = padItems(items, cols);
+  items = padItems(items, cols, isSearch);
   const cells = layoutCells(items, cols, isSearch);
   const tile = tileSize(cells);
   const tilesX = Math.max(3, Math.ceil(window.innerWidth / tile.w) + 2);
@@ -393,7 +400,7 @@ function render() {
   const rawItems = displaySegments();
   const isSearch = mode !== "browse";
   const cols = Math.max(1, Math.ceil(Math.sqrt(rawItems.length)));
-  const items = padItems(rawItems, cols);
+  const items = padItems(rawItems, cols, isSearch);
   const cells = layoutCells(items, cols, isSearch);
   const tile = tileSize(cells);
   const tilesX = Math.max(3, Math.ceil(window.innerWidth / tile.w) + 2);
@@ -431,7 +438,7 @@ function currentTile(): { w: number; h: number } {
   if (rawItems.length === 0) return { w: 1, h: 1 };
   const isSearch = mode !== "browse";
   const cols = Math.max(1, Math.ceil(Math.sqrt(rawItems.length)));
-  const items = padItems(rawItems, cols);
+  const items = padItems(rawItems, cols, isSearch);
   return tileSize(layoutCells(items, cols, isSearch));
 }
 
@@ -440,7 +447,7 @@ function centerCanvas() {
   if (rawItems.length === 0) return;
   const isSearch = mode !== "browse";
   const cols = Math.max(1, Math.ceil(Math.sqrt(rawItems.length)));
-  const items = padItems(rawItems, cols);
+  const items = padItems(rawItems, cols, isSearch);
   const cells = layoutCells(items, cols, isSearch);
   const tile = tileSize(cells);
   const first = cells[0];

@@ -226,7 +226,8 @@ def create_app(rtt_paths: Path | list[Path], embedder: embed.Embedder | None = N
             if not seg:
                 raise HTTPException(status_code=404, detail="Segment not found")
             query_vec = seg["text_embedding"]
-            raw = db.closest(query_vec, n=n, collections=col_filter)
+            raw = db.closest(query_vec, n=n + 20, collections=col_filter)
+            raw = [r for r in raw if r.get("frame_path")][:n]
             results = [_to_result(r, r.get("_distance", 0.0)) for r in raw]
             return SearchResponse(query=f"similar:{segment_id}", results=results)
 
@@ -234,7 +235,8 @@ def create_app(rtt_paths: Path | list[Path], embedder: embed.Embedder | None = N
             raise HTTPException(status_code=400, detail="Empty query")
 
         query_vec = _embedder.embed(q)
-        raw = db.closest(query_vec, n=n, collections=col_filter)
+        raw = db.closest(query_vec, n=n + 20, collections=col_filter)
+        raw = [r for r in raw if r.get("frame_path")][:n]
         results = [_to_result(r, r.get("_distance", 0.0)) for r in raw]
         return SearchResponse(query=q, results=results)
 
@@ -257,7 +259,8 @@ def create_app(rtt_paths: Path | list[Path], embedder: embed.Embedder | None = N
         collections: str = Query(default=""),
     ):
         col_filter = [c for c in collections.split(",") if c] if collections else None
-        rows = db.list_segments(offset=offset, limit=limit, collections=col_filter)
+        rows = db.list_segments(offset=offset, limit=limit + 20, collections=col_filter)
+        rows = [r for r in rows if r.get("frame_path")][:limit]
         total = db.count(collections=col_filter)
         results = [_to_result(r) for r in rows]
         return SegmentsResponse(segments=results, total=total, offset=offset, limit=limit)
