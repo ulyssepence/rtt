@@ -1,6 +1,6 @@
 # Remember That Time (RTT)
 
-<video src="demo.mp4" autoplay loop muted></video>
+<video src="https://github.com/user-attachments/assets/cee84037-f62f-4713-b248-d985cebb1c51" autoplay loop muted></video>
 
 Semantic video search command line tool and web demo.
 
