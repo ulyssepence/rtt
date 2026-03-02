@@ -1,10 +1,12 @@
 # Remember That Time (RTT)
 
+<video src="demo.mp4" autoplay loop muted></video>
+
 Semantic video search command line tool and web demo.
 
 The command line tool transcribes videos, enriches transcripts with an LLM for better retrieval ([EnrichIndex](https://arxiv.org/html/2504.03598)), embeds everything into a vector database, and finally writes it to a zip file with a specific structure (an `.rtt` file).
 
-The web server takes a directory of `rtt` files that have been . Search in natural language, get frozen frames from matching moments. Click a frame, play the video from that timestamp.
+The web server loads `.rtt` index files processed from videos and serves them in a web page. Search in natural language, get frozen frames from matching moments. Click a frame, play the video from that timestamp.
 
 Built for the [Prelinger Archives](https://archive.org/details/prelinger) — thousands of mid-century educational, industrial, and propaganda films, all public domain on Internet Archive.
 
@@ -69,11 +71,12 @@ uv run rtt embed video.mp4
 ## How it works
 
 1. **Transcribe** — `faster-whisper` (large-v3, local) for single files, or AssemblyAI (cloud) for batch/YouTube. Produces timestamped transcript segments
-2. **Enrich** — Claude rewrites each segment to add related concepts, synonyms, and themes (EnrichIndex technique, +11.7 recall@10 over raw transcripts)
-3. **Embed** — `nomic-embed-text` via Ollama produces 768d vectors for each enriched segment
-4. **Extract frames** — FFmpeg pulls a thumbnail at each segment's start timestamp
-5. **Package** — everything bundles into a portable `.rtt` file (zip containing `manifest.json`, `segments.parquet`, and `frames/`)
-6. **Serve** — FastAPI loads `.rtt` files into an in-memory LanceDB, serves search + thumbnails + a React frontend with Plyr.js video player
+2. **Normalize** — merges short segments and splits long ones to ~30s targets for consistent retrieval chunks
+3. **Enrich** — Claude rewrites each segment to add related concepts, synonyms, and themes (EnrichIndex technique, +11.7 recall@10 over raw transcripts)
+4. **Embed** — `nomic-embed-text` via Ollama produces 768d vectors for each enriched segment
+5. **Extract frames** — FFmpeg pulls a thumbnail at each segment's start timestamp
+6. **Package** — everything bundles into a portable `.rtt` file (zip containing `manifest.json`, `segments.parquet`, and `frames/`)
+7. **Serve** — FastAPI loads `.rtt` files into an in-memory LanceDB, serves search + thumbnails + a React frontend with Plyr.js video player
 
 ## The `.rtt` format
 
@@ -109,6 +112,9 @@ All modules in `src/rtt/`, flat structure. Protocol classes for interfaces, one 
 | `vector.py` | LanceDB vector search |
 | `package.py` | `.rtt` file creation/loading |
 | `server.py` | FastAPI search API + frontend |
+| `normalize.py` | Segment merge/split to ~30s targets |
+| `util.py` | Time dataclass, generic helpers |
+| `runtime.py` | Runtime dependency checks |
 | `main.py` | Pipeline orchestration |
 
 ## Cost

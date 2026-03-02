@@ -12,6 +12,7 @@ See `docs/2026-02-11_RTT semantic video search PRD.md` for full spec.
 CLI (__main__.py)
  └─ main.process()
      ├─ transcribe.WhisperTranscriber  (faster-whisper, local)
+     ├─ normalize.normalize()          (merge/split to ~30s)
      ├─ enrich.ClaudeEnricher          (Anthropic API)
      ├─ embed.OllamaEmbedder           (Ollama nomic-embed-text, local)
      ├─ frames.extract()               (FFmpeg)
@@ -41,6 +42,8 @@ All code in `src/rtt/`, flat structure. Types in `types.py`. Qualified imports: 
 | `main.py` | `process()` — local pipeline orchestrator | wires all above |
 | `batch.py` | `process_batch()` — async batch pipeline | wires all above |
 | `youtube.py` | `channel_video_ids()`, `RealDownloader` | yt-dlp |
+| `normalize.py` | `normalize()` | — |
+| `util.py` | `Time`, `Json`, `find()` | — |
 | `runtime.py` | `check()`, `require()`, `ensure_whisper()` | — |
 | `__main__.py` | CLI: `process`, `serve`, `batch`, `transcribe`, `enrich`, `embed` | argparse |
 

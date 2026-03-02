@@ -12,6 +12,6 @@ data/
 output/
 *.rtt
 *.rtt.json
-*.mp4
+data/**/*.mp4
 *.mp3
 node_modules/
